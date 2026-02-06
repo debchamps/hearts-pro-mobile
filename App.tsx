@@ -313,10 +313,20 @@ export default function App() {
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
-    const targetFanWidth = window.innerWidth - 60;
+    
+    // We want the left card at margin 16px.
+    // We want the right-most card at 50% visibility.
+    // cardWidth = 108px. 50% visible means right edge = window.innerWidth + 54px.
+    const leftMargin = 16;
     const cardWidth = 108;
-    const calculated = (targetFanWidth - cardWidth) / (count - 1);
-    return Math.max(12, Math.min(30, calculated));
+    const targetRightEdge = window.innerWidth + (cardWidth / 2);
+    
+    // Total Span = (targetRightEdge) - (leftMargin) - (cardWidth)
+    const availableSpan = targetRightEdge - leftMargin - cardWidth;
+    const spacing = availableSpan / (count - 1);
+    
+    // Ensure we don't go too crazy, but generally this allows wide spread.
+    return Math.max(16, Math.min(60, spacing));
   }, [gameState.players[0].hand.length]);
 
   const legalCardIds = useMemo(() => {
@@ -445,10 +455,10 @@ export default function App() {
           isWinner={clearingTrick?.winnerId === 1}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 1}
         />
-        {/* You avatar moved to the bottom just above the cards */}
+        {/* You avatar moved to the absolute bottom of the game area */}
         <Avatar 
           player={gameState.players[0]} 
-          pos="bottom-2 left-1/2 -translate-x-1/2" 
+          pos="bottom-0 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 0}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 0}
@@ -531,20 +541,20 @@ export default function App() {
         </div>
       </div>
 
-      <div className="relative h-48 w-full flex justify-center items-end px-4 pb-[calc(1rem+var(--safe-bottom))] z-40 bg-gradient-to-t from-black/30 to-transparent">
-        <div className="relative flex justify-center items-end h-full w-full max-w-2xl">
+      <div className="relative h-48 w-full flex justify-center items-end pb-[calc(1rem+var(--safe-bottom))] z-40 bg-gradient-to-t from-black/30 to-transparent">
+        <div className="relative h-full w-full overflow-visible">
            {gameState.players[0].hand.map((card, idx, arr) => {
              if (!card) return null;
-             const count = arr.length;
-             const mid = (count - 1) / 2;
-             const diff = idx - mid;
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
              
-             const tx = isSel ? (pIdx - 1) * 88 : diff * handSpacing;
-             const ty = isSel ? -285 : Math.abs(diff) * 2.2; 
+             // Asymmetrical Fan logic:
+             // Left card anchored at 16px. Right card anchors off-screen based on spacing calculation.
+             const leftMargin = 16;
+             const tx = isSel ? (pIdx * 90) + 40 : (idx * handSpacing) + leftMargin;
+             const ty = isSel ? -285 : (idx * 0.5); // Very subtle rising curve
              
-             const rot = isSel ? 0 : diff * 1.2;
+             const rot = isSel ? 0 : (idx - (arr.length/2)) * 0.8;
              const scale = isSel ? 0.66 : 1;
              const isLegal = legalCardIds ? legalCardIds.has(card.id) : true;
              const showInactive = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isLegal;
