@@ -1,0 +1,26 @@
+{
+  "name": "Hearts Pro Mobile",
+  "short_name": "Hearts Pro",
+  "description": "Professional offline Hearts card game with advanced AI.",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1041/1041865.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1041/1041865.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b2e13",
+  "theme_color": "#0b2e13",
+  "scope": "/",
+  "requestFramePermissions": []
+}
