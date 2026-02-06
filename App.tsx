@@ -13,21 +13,18 @@ const INITIAL_PLAYERS: Player[] = [
 const TARGET_SCORE = 100;
 const DRAG_THRESHOLD = 80;
 
-// Sound assets
 const SOUNDS = {
-  PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3', // card flip
-  CLEAR: 'https://cdn.pixabay.com/audio/2022/03/10/audio_c3523e4291.mp3', // sweep/shuffle
-  SCORE: 'https://cdn.pixabay.com/audio/2021/08/04/audio_0625615d9a.mp3', // success chime
+  PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
+  CLEAR: 'https://cdn.pixabay.com/audio/2022/03/10/audio_c3523e4291.mp3',
+  SCORE: 'https://cdn.pixabay.com/audio/2021/08/04/audio_0625615d9a.mp3',
 };
 
-// Simple Sound Manager
 const playSound = (url: string, volume = 0.4) => {
   const audio = new Audio(url);
   audio.volume = volume;
-  audio.play().catch(() => {}); // Catch browser policy errors
+  audio.play().catch(() => {});
 };
 
-// Reusable Overlay component
 function Overlay({ title, subtitle, children }: { title: string, subtitle: string, children?: React.ReactNode }) {
   return (
     <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-10 text-center animate-play">
@@ -57,8 +54,6 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [clearingTrick, setClearingTrick] = useState<{ winnerId: number } | null>(null);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
-
-  // Drag state
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
   const startRound = useCallback(() => {
@@ -76,22 +71,26 @@ export default function App() {
     const cycle = (gameState.roundNumber - 1) % 4;
     const isPassingRound = cycle !== 3;
 
-    setGameState(prev => ({
-      ...prev,
-      players,
-      phase: isPassingRound ? 'PASSING' : 'PLAYING',
-      turnIndex: -1,
-      currentTrick: [],
-      leadSuit: null,
-      heartsBroken: false,
-      passingCards: []
-    }));
-    setHintCardId(null);
+    setGameState(prev => {
+      let turnIdx = -1;
+      if (!isPassingRound) {
+         players.forEach((p, i) => { if (p.hand.some(c => c && c.id === '2-CLUBS')) turnIdx = i; });
+      }
 
+      return {
+        ...prev,
+        players,
+        phase: isPassingRound ? 'PASSING' : 'PLAYING',
+        turnIndex: turnIdx,
+        currentTrick: [],
+        leadSuit: null,
+        heartsBroken: false,
+        passingCards: []
+      };
+    });
+
+    setHintCardId(null);
     if (!isPassingRound) {
-       let starter = 0;
-       players.forEach((p, i) => { if (p.hand.some(c => c && c.id === '2-CLUBS')) starter = i; });
-       setGameState(prev => ({ ...prev, turnIndex: starter }));
        setMessage("Round 4: No Pass. 2 of Clubs leads.");
     } else {
        const dir = cycle === 0 ? "Left" : cycle === 1 ? "Right" : "Across";
@@ -106,7 +105,6 @@ export default function App() {
     }
   }, [gameState.phase, startRound, screen]);
 
-  // Audio Triggers
   useEffect(() => {
     if (soundEnabled && (gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER')) {
       playSound(SOUNDS.SCORE, 0.5);
@@ -117,6 +115,7 @@ export default function App() {
     if (soundEnabled) playSound(SOUNDS.PLAY, 0.4);
     
     setGameState(prev => {
+      if (prev.currentTrick.length >= 4) return prev;
       const player = prev.players[playerId];
       if (!player) return prev;
       const card = player.hand.find(c => c && c.id === cardId);
@@ -165,15 +164,12 @@ export default function App() {
         const sourcePlayerId = (p.id - shift + 4) % 4;
         const receivingCards = passedCardsByPlayer[sourcePlayerId] || [];
         const removedCards = passedCardsByPlayer[p.id] || [];
-        
         const remainingHand = p.hand.filter(c => c && !removedCards.some(rc => rc && rc.id === c.id));
-        
         const updatedHand = [...remainingHand, ...receivingCards].sort((a, b) => {
            if (!a || !b) return 0;
            if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
            return b.value - a.value;
         });
-        
         return { ...p, hand: updatedHand };
       });
 
@@ -208,22 +204,13 @@ export default function App() {
 
   const handleHint = async () => {
     if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0 || clearingTrick || isProcessing) return;
-    
     setIsProcessing(true);
-    const humanPlayer = gameState.players[0];
-    const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
-    
     try {
-      const bestCardId = await getBestMove(
-        humanPlayer.hand, 
-        gameState.currentTrick, 
-        gameState.leadSuit, 
-        gameState.heartsBroken, 
-        isFirstTrick, 
-        humanPlayer.name
-      );
+      const humanPlayer = gameState.players[0];
+      const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
+      const bestCardId = await getBestMove(humanPlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, humanPlayer.name);
       setHintCardId(bestCardId);
-      setTimeout(() => setHintCardId(null), 3000); // Clear hint after 3 seconds
+      setTimeout(() => setHintCardId(null), 3000);
     } catch (e) {
       console.error("Hint failed", e);
     } finally {
@@ -233,17 +220,30 @@ export default function App() {
 
   useEffect(() => {
     const activePlayer = gameState.players[gameState.turnIndex];
-    if (gameState.phase === 'PLAYING' && activePlayer && !activePlayer.isHuman && !isProcessing && screen === 'GAME' && !clearingTrick) {
+    if (
+      gameState.phase === 'PLAYING' && 
+      activePlayer && 
+      !activePlayer.isHuman && 
+      !isProcessing && 
+      screen === 'GAME' && 
+      !clearingTrick &&
+      gameState.currentTrick.length < 4
+    ) {
       const runAi = async () => {
         setIsProcessing(true);
-        const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
-        const cardId = await getBestMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, activePlayer.name);
-        if (cardId) playCard(gameState.turnIndex, cardId);
-        setIsProcessing(false);
+        try {
+          const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
+          const cardId = await getBestMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, activePlayer.name);
+          if (cardId) playCard(gameState.turnIndex, cardId);
+        } catch (err) {
+          console.error("AI Turn Error:", err);
+        } finally {
+          setIsProcessing(false);
+        }
       };
       runAi();
     }
-  }, [gameState.turnIndex, gameState.phase, screen, isProcessing, clearingTrick, playCard]);
+  }, [gameState.turnIndex, gameState.phase, screen, isProcessing, clearingTrick, playCard, gameState.currentTrick.length]);
 
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
@@ -274,7 +274,13 @@ export default function App() {
                  return { ...p, score: (p.score || 0) + added, currentRoundScore: 0 };
               });
               const anyGameOver = finalPlayers.some(p => p.score >= TARGET_SCORE);
-              return { ...prev, players: finalPlayers, phase: anyGameOver ? 'GAME_OVER' : 'ROUND_END' };
+              return { 
+                ...prev, 
+                players: finalPlayers, 
+                phase: anyGameOver ? 'GAME_OVER' : 'ROUND_END',
+                currentTrick: [],
+                leadSuit: null
+              };
             }
             return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId };
           });
@@ -286,7 +292,7 @@ export default function App() {
   }, [gameState.currentTrick, soundEnabled]);
 
   const handleHumanPlay = (card: Card) => {
-    if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
+    if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick || gameState.currentTrick.length >= 4) return;
     const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
     const hasLeadSuit = gameState.players[0].hand.some(c => c && c.suit === gameState.leadSuit);
 
@@ -312,7 +318,6 @@ export default function App() {
 
   const legalCardIds = useMemo(() => {
     if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0) return null;
-    
     const hand = gameState.players[0].hand;
     const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
     const hasLeadSuit = hand.some(c => c && c.suit === gameState.leadSuit);
@@ -321,7 +326,6 @@ export default function App() {
     hand.forEach(card => {
         if (!card) return;
         let isLegal = true;
-        
         if (!gameState.leadSuit) {
             if (isFirstTrick) {
                 isLegal = card.id === '2-CLUBS';
@@ -348,6 +352,8 @@ export default function App() {
   }, [gameState]);
 
   const onDragStart = (e: React.TouchEvent | React.MouseEvent, cardId: string) => {
+    if (dragInfo) return; // Exclusive selection: don't allow multiple drags
+    e.stopPropagation(); // Don't let underlying cards catch this click/touch
     const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
     setDragInfo({ id: cardId, startY: y, currentY: y });
   };
@@ -359,23 +365,16 @@ export default function App() {
   };
 
   const onDragEnd = (card: Card) => {
-    if (!dragInfo) return;
+    if (!dragInfo || dragInfo.id !== card.id) return;
     const deltaY = dragInfo.startY - dragInfo.currentY;
-    
     if (deltaY > 10) {
       if (deltaY >= DRAG_THRESHOLD) {
-         if (gameState.phase === 'PASSING') {
-           togglePassingCard(card.id);
-         } else {
-           handleHumanPlay(card);
-         }
+         if (gameState.phase === 'PASSING') togglePassingCard(card.id);
+         else handleHumanPlay(card);
       }
     } else {
-      if (gameState.phase === 'PASSING') {
-        togglePassingCard(card.id);
-      } else {
-        handleHumanPlay(card);
-      }
+      if (gameState.phase === 'PASSING') togglePassingCard(card.id);
+      else handleHumanPlay(card);
     }
     setDragInfo(null);
   };
@@ -404,7 +403,7 @@ export default function App() {
       onTouchMove={onDragMove}
       onTouchEnd={() => dragInfo && setDragInfo(null)}
     >
-      <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/20 pb-4 backdrop-blur-md border-b border-white/5">
+      <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/60 pb-4 backdrop-blur-md border-b border-white/5 h-16 shadow-2xl">
         <div className="flex gap-2">
             <button onClick={() => setScreen('MENU')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
             <button onClick={() => setSoundEnabled(!soundEnabled)} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">
@@ -419,32 +418,30 @@ export default function App() {
       </div>
 
       <div className="flex-1 relative flex flex-col pt-16">
-        {/* Avatars */}
         <Avatar 
           player={gameState.players[2]} 
-          pos="top-4 left-1/2 -translate-x-1/2" 
+          pos="top-20 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 2 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 2}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 2}
         />
         <Avatar 
           player={gameState.players[3]} 
-          pos="top-1/2 left-6 -translate-y-1/2" 
+          pos="top-[45%] left-2" 
           active={gameState.turnIndex === 3 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 3}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 3}
         />
         <Avatar 
           player={gameState.players[1]} 
-          pos="top-1/2 right-6 -translate-y-1/2" 
+          pos="top-[45%] right-2" 
           active={gameState.turnIndex === 1 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 1}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 1}
         />
-        {/* Human player avatar clearly centered above the card hand container */}
         <Avatar 
           player={gameState.players[0]} 
-          pos="bottom-52 left-1/2 -translate-x-1/2" 
+          pos="bottom-48 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 0}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 0}
@@ -455,7 +452,6 @@ export default function App() {
               <span className="text-[20rem] text-white">♥</span>
           </div>
 
-          {/* Turn Pointer */}
           {gameState.phase === 'PLAYING' && gameState.turnIndex !== -1 && !clearingTrick && (
             <div className="absolute inset-0 flex items-center justify-center transition-all duration-700 pointer-events-none z-0" 
                  style={{ transform: `rotate(${(gameState.turnIndex - 2) * -90}deg)` }}>
@@ -467,7 +463,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Dashboard in center */}
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center pointer-events-none z-10 gap-2">
             {gameState.leadSuit && (
               <div className="bg-black/60 backdrop-blur-xl px-4 py-2 rounded-2xl border border-white/10 shadow-2xl animate-fan flex flex-col items-center">
@@ -485,20 +480,16 @@ export default function App() {
           </div>
 
           {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
-             // Reduced spread to 55 to cluster cards more in the center, away from avatars
              const spread = 55; 
              const offsets = [
-               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' }, // You (Bottom)
-               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },   // Fish (Right)
-               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },  // Snake (Top)
-               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' } // Shrimp (Left)
+               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },
+               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },
+               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },
+               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' }
              ];
              const off = offsets[t.playerId] || { x:0, y:0, start:'scale(0)', rot:'0deg' };
              const winPositions = [
-                { x: 0, y: 450 },
-                { x: 300, y: 0 },
-                { x: 0, y: -450 },
-                { x: -300, y: 0 }
+                { x: 0, y: 450 }, { x: 300, y: 0 }, { x: 0, y: -450 }, { x: -300, y: 0 }
              ];
              const winDir = winPositions[clearingTrick?.winnerId ?? 0];
 
@@ -524,16 +515,11 @@ export default function App() {
           <div className="absolute top-[35%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
-                {[0,1,2].map(i => {
-                  return (
-                    <div 
-                      key={i} 
-                      className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}
-                    >
+                {[0,1,2].map(i => (
+                    <div key={i} className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}>
                        <div className="text-white/5 text-5xl font-black">?</div>
                     </div>
-                  );
-                })}
+                ))}
              </div>
              <button 
               onClick={handlePass}
@@ -561,18 +547,14 @@ export default function App() {
              const count = arr.length;
              const mid = (count - 1) / 2;
              const diff = idx - mid;
-             
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
-             
              const tx = isSel ? (pIdx - 1) * 88 : diff * handSpacing;
              const ty = isSel ? -325 : Math.abs(diff) * 2.2; 
              const rot = isSel ? 0 : diff * 1.2;
              const scale = isSel ? 0.66 : 1;
-             
              const isLegal = legalCardIds ? legalCardIds.has(card.id) : true;
              const showInactive = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isLegal;
-
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const willPlay = isDragging && Math.abs(dragOffset) >= DRAG_THRESHOLD;
@@ -598,11 +580,6 @@ export default function App() {
                       Release to Play
                     </div>
                   )}
-                  {isHint && (
-                    <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-blue-500 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-tighter whitespace-nowrap animate-pulse shadow-lg">
-                      Best Move
-                    </div>
-                  )}
                 </div>
              );
            })}
@@ -613,20 +590,12 @@ export default function App() {
         <NavItem icon="🃏" label="Games" />
         <NavItem icon="ℹ&nbsp;" label="Info" />
         <NavItem icon="🎴" label="Play" active={gameState.phase === 'PLAYING'} />
-        <NavItem 
-          icon="💡" 
-          label="Hint" 
-          onClick={handleHint}
-          disabled={gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING'} 
-        />
+        <NavItem icon="💡" label="Hint" onClick={handleHint} disabled={gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING'} />
         <NavItem icon="🛡️" label="Tiers" />
       </div>
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
-        <Overlay 
-          title={gameState.phase === 'GAME_OVER' ? "GAME OVER" : "ROUND OVER"} 
-          subtitle={gameState.phase === 'GAME_OVER' ? "Final Standings" : "Round Standings"}
-        >
+        <Overlay title={gameState.phase === 'GAME_OVER' ? "GAME OVER" : "ROUND OVER"} subtitle={gameState.phase === 'GAME_OVER' ? "Final Standings" : "Round Standings"}>
             <div className="w-full space-y-3 mb-10">
                {gameState.players.map(p => (
                  <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-3xl border border-white/10 shadow-inner">
@@ -634,22 +603,17 @@ export default function App() {
                        <span className="text-4xl">{p.avatar}</span>
                        <div className="flex flex-col items-start text-left">
                           <span className={`font-black text-sm uppercase tracking-tight ${p.id === 0 ? 'text-yellow-400' : 'text-white'}`}>{p.name}</span>
-                          <span className="text-[10px] text-white/30 font-bold tracking-[0.2em]">TOTAL: {p.score}</span>
+                          <span className="text-[10px] text-white/30 font-bold tracking-[0.2em]">TOTAL: {p.score || 0}</span>
                        </div>
                     </div>
-                    <div className="text-right">
-                       <div className="text-3xl font-black italic text-yellow-500">+{p.currentRoundScore || 0}</div>
-                    </div>
+                    <div className="text-right"><div className="text-3xl font-black italic text-yellow-500">+{p.currentRoundScore || 0}</div></div>
                  </div>
                ))}
             </div>
             <button 
               onClick={() => {
-                if (gameState.phase === 'GAME_OVER') {
-                  setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'}));
-                } else {
-                  setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1}));
-                }
+                if (gameState.phase === 'GAME_OVER') setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'}));
+                else setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1}));
               }} 
               className="w-full py-6 bg-green-600 rounded-[2.5rem] font-black text-2xl uppercase border-b-8 border-green-800 active:translate-y-2 transition-all shadow-xl"
             >
@@ -664,40 +628,19 @@ export default function App() {
 function Avatar({ player, pos, active, isWinner = false, isLeading = false }: { player: Player, pos: string, active: boolean, isWinner?: boolean, isLeading?: boolean }) {
   if (!player) return null;
   return (
-    <div className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'scale-110 drop-shadow-[0_0_20px_rgba(250,204,21,0.6)]' : 'opacity-40 scale-90'}`}>
-      
-      {/* Turn Indicator Badge */}
-      {active && (
-        <div className="absolute -top-10 bg-yellow-400 text-black px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter animate-bounce shadow-xl z-20 border border-white/20">
-          {player.id === 0 ? 'Your Turn' : 'Playing...'}
-        </div>
-      )}
-
-      {/* Leading Badge */}
-      {isLeading && (
-        <div className="absolute -bottom-14 bg-white/10 text-white/60 px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest border border-white/5 backdrop-blur-md">
-          Trick Lead
-        </div>
-      )}
-
-      <div className={`w-18 h-18 rounded-[1.4rem] flex items-center justify-center text-4xl shadow-2xl border-2 transition-all ${active ? 'bg-yellow-400 border-yellow-200 ring-4 ring-yellow-400/30' : 'bg-black/40 border-white/10'} ${isWinner ? 'winner-glow' : ''}`}>
-        {player.avatar}
+    <div className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'opacity-100 scale-110' : 'opacity-60 scale-95'} ${isWinner ? 'scale-125' : ''}`}>
+      {isLeading && <div className="absolute -bottom-10 bg-white/20 text-white px-2 py-0.5 rounded-md text-[7px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-md shadow-lg z-20">Lead</div>}
+      <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-3xl shadow-[0_10px_30px_rgba(0,0,0,0.7)] border transition-all duration-500 ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : 'bg-black/70 border-white/20'} ${active ? 'border-yellow-500 ring-2 ring-yellow-500/30' : ''}`}>{player.avatar}</div>
+      <div className="flex flex-col items-center mt-1">
+          <div className="text-xl font-black italic drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-white leading-none">{player.score + (player.currentRoundScore || 0)}</div>
       </div>
-      <div className={`px-3 py-1 rounded-full text-[9px] font-black mt-2 uppercase tracking-widest shadow-md ${active ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/50'}`}>
-        {player.name}
-      </div>
-      <div className="text-xl font-black italic mt-1 drop-shadow-md text-white">{player.score + (player.currentRoundScore || 0)}</div>
     </div>
   );
 }
 
 function NavItem({ icon, label, active = false, onClick, disabled = false }: { icon: string, label: string, active?: boolean, onClick?: () => void, disabled?: boolean }) {
   return (
-    <button 
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex flex-col items-center gap-1.5 transition-all duration-300 ${active ? 'text-yellow-500 scale-110 drop-shadow-[0_0_10px_rgba(234,179,8,0.5)]' : 'text-white/20'} ${disabled ? 'opacity-20 pointer-events-none' : 'active:scale-90'}`}
-    >
+    <button onClick={onClick} disabled={disabled} className={`flex flex-col items-center gap-1.5 transition-all duration-300 ${active ? 'text-yellow-500 scale-110 drop-shadow-[0_0_10px_rgba(234,179,8,0.5)]' : 'text-white/20'} ${disabled ? 'opacity-20 pointer-events-none' : 'active:scale-90'}`}>
       <span className="text-2xl">{icon}</span>
       <span className="text-[9px] font-black uppercase tracking-widest">{label}</span>
       {active && <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 mt-1 shadow-[0_0_10px_yellow]" />}
@@ -712,27 +655,14 @@ function CardView({ card, size = 'md', inactive = false, highlighted = false, hi
   const cornerSymStyle = size === 'sm' ? 'text-[10px]' : size === 'md' ? 'text-xs' : 'text-sm';
   const brSymStyle = size === 'sm' ? 'text-xl' : size === 'md' ? 'text-2xl' : 'text-3xl';
   const hugeIconStyle = size === 'sm' ? 'text-6xl' : size === 'md' ? 'text-7xl' : 'text-8xl';
-  
   const ringColor = hint ? 'ring-blue-400 shadow-[0_0_30px_rgba(59,130,246,0.8)]' : 'ring-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)]';
 
   return (
     <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start ${inactive ? '' : 'border-b-[6px]'} border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300 ${highlighted ? `ring-4 ${ringColor}` : ''} ${hint ? 'animate-pulse' : ''}`}>
-      <div className="flex flex-col items-start leading-none z-10">
-          <div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div>
-          <div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
-      </div>
-      
-      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.06] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>
-          {SUIT_SYMBOLS[card.suit]}
-      </div>
-
-      <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>
-          {SUIT_SYMBOLS[card.suit]}
-      </div>
-
-      {inactive && (
-        <div className="absolute inset-0 bg-black/10 backdrop-blur-[0.5px]" />
-      )}
+      <div className="flex flex-col items-start leading-none z-10"><div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div><div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div></div>
+      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.06] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>{SUIT_SYMBOLS[card.suit]}</div>
+      <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>{SUIT_SYMBOLS[card.suit]}</div>
+      {inactive && <div className="absolute inset-0 bg-black/10 backdrop-blur-[0.5px]" />}
     </div>
   );
 }
