@@ -312,8 +312,11 @@ export default function App() {
 
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
-    const availableWidth = window.innerWidth - 140; 
-    return Math.min(32, availableWidth / Math.max(1, count - 1));
+    if (count <= 1) return 0;
+    const targetFanWidth = window.innerWidth - 60;
+    const cardWidth = 108;
+    const calculated = (targetFanWidth - cardWidth) / (count - 1);
+    return Math.max(12, Math.min(30, calculated));
   }, [gameState.players[0].hand.length]);
 
   const legalCardIds = useMemo(() => {
@@ -352,8 +355,8 @@ export default function App() {
   }, [gameState]);
 
   const onDragStart = (e: React.TouchEvent | React.MouseEvent, cardId: string) => {
-    if (dragInfo) return; // Exclusive selection: don't allow multiple drags
-    e.stopPropagation(); // Don't let underlying cards catch this click/touch
+    if (dragInfo) return; 
+    e.stopPropagation(); 
     const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
     setDragInfo({ id: cardId, startY: y, currentY: y });
   };
@@ -365,7 +368,10 @@ export default function App() {
   };
 
   const onDragEnd = (card: Card) => {
-    if (!dragInfo || dragInfo.id !== card.id) return;
+    if (!dragInfo || dragInfo.id !== card.id) {
+        setDragInfo(null);
+        return;
+    }
     const deltaY = dragInfo.startY - dragInfo.currentY;
     if (deltaY > 10) {
       if (deltaY >= DRAG_THRESHOLD) {
@@ -420,28 +426,29 @@ export default function App() {
       <div className="flex-1 relative flex flex-col pt-16">
         <Avatar 
           player={gameState.players[2]} 
-          pos="top-20 left-1/2 -translate-x-1/2" 
+          pos="top-16 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 2 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 2}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 2}
         />
         <Avatar 
           player={gameState.players[3]} 
-          pos="top-[45%] left-2" 
+          pos="top-[45%] left-1" 
           active={gameState.turnIndex === 3 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 3}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 3}
         />
         <Avatar 
           player={gameState.players[1]} 
-          pos="top-[45%] right-2" 
+          pos="top-[45%] right-1" 
           active={gameState.turnIndex === 1 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 1}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 1}
         />
+        {/* You avatar moved to the bottom just above the cards */}
         <Avatar 
           player={gameState.players[0]} 
-          pos="bottom-48 left-1/2 -translate-x-1/2" 
+          pos="bottom-2 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 0}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 0}
@@ -462,22 +469,6 @@ export default function App() {
               </div>
             </div>
           )}
-
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center pointer-events-none z-10 gap-2">
-            {gameState.leadSuit && (
-              <div className="bg-black/60 backdrop-blur-xl px-4 py-2 rounded-2xl border border-white/10 shadow-2xl animate-fan flex flex-col items-center">
-                 <span className="text-[8px] font-black uppercase tracking-[0.2em] text-white/40 mb-1">Lead Suit</span>
-                 <span className={`${SUIT_COLORS[gameState.leadSuit]} text-2xl font-black`}>
-                   {SUIT_SYMBOLS[gameState.leadSuit]}
-                 </span>
-              </div>
-            )}
-            {gameState.heartsBroken && (
-              <div className="bg-red-500/10 px-3 py-1 rounded-full border border-red-500/20 text-red-500 text-[8px] font-black uppercase tracking-widest flex items-center gap-1.5 backdrop-blur-sm">
-                 <span className="text-xs">💔</span> Broken
-              </div>
-            )}
-          </div>
 
           {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
              const spread = 55; 
@@ -549,8 +540,10 @@ export default function App() {
              const diff = idx - mid;
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
+             
              const tx = isSel ? (pIdx - 1) * 88 : diff * handSpacing;
-             const ty = isSel ? -325 : Math.abs(diff) * 2.2; 
+             const ty = isSel ? -285 : Math.abs(diff) * 2.2; 
+             
              const rot = isSel ? 0 : diff * 1.2;
              const scale = isSel ? 0.66 : 1;
              const isLegal = legalCardIds ? legalCardIds.has(card.id) : true;
@@ -558,7 +551,6 @@ export default function App() {
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const willPlay = isDragging && Math.abs(dragOffset) >= DRAG_THRESHOLD;
-             const isHint = hintCardId === card.id;
 
              return (
                 <div 
@@ -567,14 +559,14 @@ export default function App() {
                   onTouchStart={(e) => onDragStart(e, card.id)}
                   onMouseUp={() => onDragEnd(card)}
                   onTouchEnd={() => onDragEnd(card)}
-                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none' : ''} ${isHint ? 'z-[450]' : ''}`}
+                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none pointer-events-auto' : ''}`}
                   style={{ 
                     transform: `translateX(${tx}px) translateY(${ty + dragOffset}px) rotate(${isDragging ? 0 : rot}deg) scale(${isDragging ? (willPlay ? 1.15 : 1) : scale})`,
-                    zIndex: isDragging ? 500 : (isSel ? 300 : (isHint ? 450 : 100 + idx)),
+                    zIndex: isDragging ? 500 : (isSel ? 300 : 100 + idx),
                     animationDelay: `${idx * 0.03}s`
                   }}
                 >
-                  <CardView card={card} size="lg" inactive={showInactive} highlighted={willPlay || isHint} hint={isHint} />
+                  <CardView card={card} size="lg" inactive={showInactive} highlighted={willPlay} />
                   {willPlay && (
                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-yellow-400 text-black font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-tighter whitespace-nowrap animate-bounce shadow-lg">
                       Release to Play
