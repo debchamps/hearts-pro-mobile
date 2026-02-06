@@ -66,6 +66,7 @@ export default function App() {
     const players = gameState.players.map((p, i) => ({
       ...p,
       hand: deck.slice(i * 13, (i + 1) * 13).sort((a, b) => {
+        if (!a || !b) return 0;
         if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
         return b.value - a.value;
       }),
@@ -152,6 +153,7 @@ export default function App() {
           passedCardsByPlayer[p.id] = p.hand.filter(c => c && prev.passingCards.includes(c.id));
         } else {
           const sorted = [...p.hand].sort((a, b) => {
+             if (!a || !b) return 0;
              const weight = (c: Card) => (c.id === 'Q-SPADES' ? 1000 : c.suit === 'HEARTS' ? 100 + c.value : c.value);
              return weight(b) - weight(a);
           });
@@ -209,7 +211,7 @@ export default function App() {
     
     setIsProcessing(true);
     const humanPlayer = gameState.players[0];
-    const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
+    const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
     
     try {
       const bestCardId = await getBestMove(
@@ -234,7 +236,7 @@ export default function App() {
     if (gameState.phase === 'PLAYING' && activePlayer && !activePlayer.isHuman && !isProcessing && screen === 'GAME' && !clearingTrick) {
       const runAi = async () => {
         setIsProcessing(true);
-        const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
+        const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
         const cardId = await getBestMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, activePlayer.name);
         if (cardId) playCard(gameState.turnIndex, cardId);
         setIsProcessing(false);
@@ -247,10 +249,13 @@ export default function App() {
     if (gameState.currentTrick.length === 4) {
       const timer = setTimeout(() => {
         const firstCard = gameState.currentTrick[0];
-        if (!firstCard) return;
+        if (!firstCard || !firstCard.card) return;
 
         const leadSuit = firstCard.card.suit;
-        const winner = gameState.currentTrick.reduce((w, c) => (c.card.suit === leadSuit && c.card.value > w.card.value ? c : w), firstCard);
+        const winner = gameState.currentTrick.reduce((w, c) => {
+          if (!c.card || !w.card) return w;
+          return (c.card.suit === leadSuit && c.card.value > w.card.value ? c : w);
+        }, firstCard);
         
         setClearingTrick({ winnerId: winner.playerId });
         if (soundEnabled) playSound(SOUNDS.CLEAR, 0.4);
@@ -264,9 +269,9 @@ export default function App() {
               let moonShooterId = -1;
               newPlayers.forEach(p => { if (p.currentRoundScore === 26) moonShooterId = p.id; });
               const finalPlayers = newPlayers.map(p => {
-                 let added = p.currentRoundScore;
+                 let added = p.currentRoundScore || 0;
                  if (moonShooterId !== -1) added = (p.id === moonShooterId) ? 0 : 26;
-                 return { ...p, score: p.score + added, currentRoundScore: 0 };
+                 return { ...p, score: (p.score || 0) + added, currentRoundScore: 0 };
               });
               const anyGameOver = finalPlayers.some(p => p.score >= TARGET_SCORE);
               return { ...prev, players: finalPlayers, phase: anyGameOver ? 'GAME_OVER' : 'ROUND_END' };
@@ -282,7 +287,7 @@ export default function App() {
 
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
-    const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
+    const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
     const hasLeadSuit = gameState.players[0].hand.some(c => c && c.suit === gameState.leadSuit);
 
     if (isFirstTrick && !gameState.leadSuit && card.id !== '2-CLUBS') { setMessage("Lead with 2 of Clubs"); return; }
@@ -301,17 +306,15 @@ export default function App() {
 
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
-    // Keep cards fully clickable by ensuring enough horizontal margin
     const availableWidth = window.innerWidth - 140; 
     return Math.min(32, availableWidth / Math.max(1, count - 1));
   }, [gameState.players[0].hand.length]);
 
-  // Determine legal moves for visual feedback
   const legalCardIds = useMemo(() => {
     if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0) return null;
     
     const hand = gameState.players[0].hand;
-    const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
+    const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
     const hasLeadSuit = hand.some(c => c && c.suit === gameState.leadSuit);
     const set = new Set<string>();
     
@@ -320,7 +323,6 @@ export default function App() {
         let isLegal = true;
         
         if (!gameState.leadSuit) {
-            // Player is leading
             if (isFirstTrick) {
                 isLegal = card.id === '2-CLUBS';
             } else {
@@ -330,11 +332,9 @@ export default function App() {
                 }
             }
         } else {
-            // Player is following
             if (hasLeadSuit) {
                 isLegal = card.suit === gameState.leadSuit;
             } else {
-                // Discarding
                 if (isFirstTrick) {
                     const isPointCard = card.suit === 'HEARTS' || card.id === 'Q-SPADES';
                     const onlyPoints = hand.every(c => !c || c.suit === 'HEARTS' || c.id === 'Q-SPADES');
@@ -347,7 +347,6 @@ export default function App() {
     return set;
   }, [gameState]);
 
-  // Handle Drag Events
   const onDragStart = (e: React.TouchEvent | React.MouseEvent, cardId: string) => {
     const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
     setDragInfo({ id: cardId, startY: y, currentY: y });
@@ -356,7 +355,6 @@ export default function App() {
   const onDragMove = (e: React.TouchEvent | React.MouseEvent) => {
     if (!dragInfo) return;
     const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    // Only allow dragging upwards (currentY should be less than startY)
     setDragInfo(prev => prev ? { ...prev, currentY: Math.min(prev.startY, y) } : null);
   };
 
@@ -373,7 +371,6 @@ export default function App() {
          }
       }
     } else {
-      // Tap behavior
       if (gameState.phase === 'PASSING') {
         togglePassingCard(card.id);
       } else {
@@ -428,28 +425,29 @@ export default function App() {
           pos="top-4 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 2 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 2}
-          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0].playerId === 2}
+          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 2}
         />
         <Avatar 
           player={gameState.players[3]} 
           pos="top-1/2 left-6 -translate-y-1/2" 
           active={gameState.turnIndex === 3 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 3}
-          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0].playerId === 3}
+          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 3}
         />
         <Avatar 
           player={gameState.players[1]} 
           pos="top-1/2 right-6 -translate-y-1/2" 
           active={gameState.turnIndex === 1 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 1}
-          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0].playerId === 1}
+          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 1}
         />
+        {/* Human player avatar clearly centered above the card hand container */}
         <Avatar 
           player={gameState.players[0]} 
-          pos="bottom-48 left-6" 
+          pos="bottom-52 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 0}
-          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0].playerId === 0}
+          isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 0}
         />
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[22rem] h-[22rem] flex items-center justify-center z-20">
@@ -487,12 +485,13 @@ export default function App() {
           </div>
 
           {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
-             const spread = 95;
+             // Reduced spread to 55 to cluster cards more in the center, away from avatars
+             const spread = 55; 
              const offsets = [
-               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },
-               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },
-               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },
-               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' }
+               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' }, // You (Bottom)
+               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },   // Fish (Right)
+               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },  // Snake (Top)
+               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' } // Shrimp (Left)
              ];
              const off = offsets[t.playerId] || { x:0, y:0, start:'scale(0)', rot:'0deg' };
              const winPositions = [
@@ -504,7 +503,7 @@ export default function App() {
              const winDir = winPositions[clearingTrick?.winnerId ?? 0];
 
              return (
-               <div key={t.card.id} 
+               <div key={t.card?.id || `trick-${playIdx}`} 
                     className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`}
                     style={{ 
                       '--play-x': `${off.x}px`,
@@ -526,15 +525,12 @@ export default function App() {
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
                 {[0,1,2].map(i => {
-                  const cardId = gameState.passingCards[i];
-                  const card = gameState.players[0].hand.find(c => c && c.id === cardId);
                   return (
                     <div 
                       key={i} 
-                      onClick={() => cardId && togglePassingCard(cardId)}
-                      className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300 ${cardId ? 'cursor-pointer active:scale-95' : ''}`}
+                      className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}
                     >
-                       {card ? <CardView card={card} size="sm" /> : <div className="text-white/5 text-5xl font-black">?</div>}
+                       <div className="text-white/5 text-5xl font-black">?</div>
                     </div>
                   );
                 })}
@@ -565,11 +561,15 @@ export default function App() {
              const count = arr.length;
              const mid = (count - 1) / 2;
              const diff = idx - mid;
-             const tx = diff * handSpacing;
-             const ty = Math.abs(diff) * 2.2; 
-             const rot = diff * 1.2;
              
              const isSel = gameState.passingCards.includes(card.id);
+             const pIdx = gameState.passingCards.indexOf(card.id);
+             
+             const tx = isSel ? (pIdx - 1) * 88 : diff * handSpacing;
+             const ty = isSel ? -325 : Math.abs(diff) * 2.2; 
+             const rot = isSel ? 0 : diff * 1.2;
+             const scale = isSel ? 0.66 : 1;
+             
              const isLegal = legalCardIds ? legalCardIds.has(card.id) : true;
              const showInactive = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isLegal;
 
@@ -585,10 +585,10 @@ export default function App() {
                   onTouchStart={(e) => onDragStart(e, card.id)}
                   onMouseUp={() => onDragEnd(card)}
                   onTouchEnd={() => onDragEnd(card)}
-                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${isSel ? '-translate-y-32 opacity-40 scale-75' : ''} ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none' : ''} ${isHint ? 'z-[450]' : ''}`}
+                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none' : ''} ${isHint ? 'z-[450]' : ''}`}
                   style={{ 
-                    transform: `translateX(${tx}px) translateY(${ty + dragOffset}px) rotate(${isDragging ? 0 : rot}deg) scale(${willPlay ? 1.15 : 1})`,
-                    zIndex: isDragging ? 500 : (isHint ? 450 : 100 + idx),
+                    transform: `translateX(${tx}px) translateY(${ty + dragOffset}px) rotate(${isDragging ? 0 : rot}deg) scale(${isDragging ? (willPlay ? 1.15 : 1) : scale})`,
+                    zIndex: isDragging ? 500 : (isSel ? 300 : (isHint ? 450 : 100 + idx)),
                     animationDelay: `${idx * 0.03}s`
                   }}
                 >
@@ -638,7 +638,7 @@ export default function App() {
                        </div>
                     </div>
                     <div className="text-right">
-                       <div className="text-3xl font-black italic text-yellow-500">+{p.currentRoundScore}</div>
+                       <div className="text-3xl font-black italic text-yellow-500">+{p.currentRoundScore || 0}</div>
                     </div>
                  </div>
                ))}
@@ -686,7 +686,7 @@ function Avatar({ player, pos, active, isWinner = false, isLeading = false }: { 
       <div className={`px-3 py-1 rounded-full text-[9px] font-black mt-2 uppercase tracking-widest shadow-md ${active ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/50'}`}>
         {player.name}
       </div>
-      <div className="text-xl font-black italic mt-1 drop-shadow-md text-white">{player.score + player.currentRoundScore}</div>
+      <div className="text-xl font-black italic mt-1 drop-shadow-md text-white">{player.score + (player.currentRoundScore || 0)}</div>
     </div>
   );
 }
@@ -707,7 +707,6 @@ function NavItem({ icon, label, active = false, onClick, disabled = false }: { i
 
 function CardView({ card, size = 'md', inactive = false, highlighted = false, hint = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean }) {
   if (!card) return null;
-  // Aspect Ratio 2.25:3 = 0.75
   const dims = size === 'sm' ? 'w-[4.5rem] h-24 p-1' : size === 'md' ? 'w-[5.625rem] h-[7.5rem] p-1.5' : 'w-[6.75rem] h-36 p-2';
   const rankStyle = size === 'sm' ? 'text-lg' : size === 'md' ? 'text-xl' : 'text-2xl';
   const cornerSymStyle = size === 'sm' ? 'text-[10px]' : size === 'md' ? 'text-xs' : 'text-sm';

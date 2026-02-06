@@ -1,4 +1,3 @@
-
 import { Card, Suit, TrickCard } from "../types";
 
 /**
@@ -16,73 +15,72 @@ export async function getBestMove(
   // Artificial delay to simulate "thinking"
   await new Promise(r => setTimeout(r, 800));
 
-  const validCards = hand.filter(card => {
+  // Filter out any invalid cards just in case
+  const validHand = hand.filter(c => c !== null && c !== undefined);
+
+  const validCards = validHand.filter(card => {
     if (!leadSuit) {
       if (isFirstTrick) return card.id === '2-CLUBS';
       if (!heartsBroken && card.suit === 'HEARTS') {
-        return hand.every(c => c.suit === 'HEARTS');
+        return validHand.every(c => c && c.suit === 'HEARTS');
       }
       return true;
     }
-    const hasLeadSuit = hand.some(c => c.suit === leadSuit);
+    const hasLeadSuit = validHand.some(c => c && c.suit === leadSuit);
     if (hasLeadSuit) return card.suit === leadSuit;
     return true; // Discarding
   });
 
-  const playable = validCards.length > 0 ? validCards : hand;
+  const playable = validCards.length > 0 ? validCards : validHand;
+  if (playable.length === 0) return ''; // Should not happen in a normal game state
 
   // LEADING LOGIC
-  if (!leadSuit) {
-    if (isFirstTrick) return '2-CLUBS';
+  if (!leadSuit || currentTrick.length === 0) {
+    if (isFirstTrick) {
+      const startCard = playable.find(c => c.id === '2-CLUBS');
+      return startCard ? startCard.id : (playable[0]?.id || '');
+    }
 
-    // Strategy: Lead low cards to stay safe, or lead high if trying to pull out the Queen.
-    // Avoid leading high hearts or high spades.
     const sortedLowToHigh = [...playable].sort((a, b) => a.value - b.value);
-    
-    // Prefer leading a low Spade (not the Queen) to smoke out the Queen or bleed others
     const lowSpade = playable.find(c => c.suit === 'SPADES' && c.value < 12);
     if (lowSpade) return lowSpade.id;
 
-    // Default: play lowest card to avoid taking trick
-    return sortedLowToHigh[0].id;
+    return sortedLowToHigh[0]?.id || playable[0]?.id || '';
   }
 
   // FOLLOWING LOGIC
   const currentLeadSuit = leadSuit;
-  const hasLeadSuit = hand.some(c => c.suit === currentLeadSuit);
-  const trickHasPoints = currentTrick.some(t => t.card.points > 0);
-  const highestInTrick = currentTrick
-    .filter(t => t.card.suit === currentLeadSuit)
-    .sort((a, b) => b.card.value - a.card.value)[0];
+  const hasLeadSuit = validHand.some(c => c && c.suit === currentLeadSuit);
+  const trickHasPoints = currentTrick.some(t => t.card && t.card.points > 0);
+  
+  // Find highest card of the lead suit in the trick
+  const suitCardsInTrick = currentTrick.filter(t => t.card && t.card.suit === currentLeadSuit);
+  const highestInTrick = suitCardsInTrick.sort((a, b) => {
+    if (!a.card || !b.card) return 0;
+    return b.card.value - a.card.value;
+  })[0];
 
-  if (hasLeadSuit) {
+  if (hasLeadSuit && highestInTrick && highestInTrick.card) {
     // We must follow suit.
-    const suitCards = playable.sort((a, b) => b.value - a.value); // high to low
+    const suitCards = playable.filter(c => c.suit === currentLeadSuit).sort((a, b) => b.value - a.value); // high to low
     
     if (trickHasPoints || currentTrick.length === 3) {
-      // Try to duck (play lowest card that doesn't win, or lowest if must win)
-      const winners = suitCards.filter(c => c.value > highestInTrick.card.value);
-      const losers = suitCards.filter(c => c.value < highestInTrick.card.value);
-      
-      if (losers.length > 0) return losers[0].id; // Play highest loser (ducking effectively)
-      return suitCards[suitCards.length - 1].id; // Must win, play lowest winner
+      // Try to duck
+      const losers = suitCards.filter(c => c.value < (highestInTrick.card?.value || 0));
+      if (losers.length > 0) return losers[0].id; 
+      return suitCards[suitCards.length - 1].id; 
     } else {
-      // Safe trick so far, play highest possible to bleed others without taking points later?
-      // Actually, safest is usually playing mid-range or low.
-      return suitCards[suitCards.length - 1].id; // Play low to be safe
+      return suitCards[suitCards.length - 1].id; 
     }
   } else {
-    // DISCARDING LOGIC (The "Shed")
-    // 1. Get rid of Queen of Spades if we have it
+    // DISCARDING LOGIC
     const qSpades = playable.find(c => c.id === 'Q-SPADES');
     if (qSpades) return qSpades.id;
 
-    // 2. Get rid of high Hearts
     const hearts = playable.filter(c => c.suit === 'HEARTS').sort((a, b) => b.value - a.value);
     if (hearts.length > 0) return hearts[0].id;
 
-    // 3. Get rid of other high cards
     const sortedHighToLow = [...playable].sort((a, b) => b.value - a.value);
-    return sortedHighToLow[0].id;
+    return sortedHighToLow[0]?.id || playable[0]?.id || '';
   }
 }
