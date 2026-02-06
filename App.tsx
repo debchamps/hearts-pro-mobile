@@ -12,6 +12,17 @@ const INITIAL_PLAYERS: Player[] = [
 
 const TARGET_SCORE = 100;
 
+// Reusable Overlay component
+function Overlay({ title, subtitle, children }: { title: string, subtitle: string, children: React.ReactNode }) {
+  return (
+    <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-10 text-center animate-play">
+       <h2 className="text-7xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl">{title}</h2>
+       <p className="text-white/30 text-[11px] font-black uppercase tracking-[0.5em] mb-12">{subtitle}</p>
+       <div className="w-full max-w-sm">{children}</div>
+    </div>
+  );
+}
+
 export default function App() {
   const [screen, setScreen] = useState<ScreenState>('MENU');
   const [gameState, setGameState] = useState<GameState>({
@@ -57,7 +68,7 @@ export default function App() {
 
     if (!isPassingRound) {
        let starter = 0;
-       players.forEach((p, i) => { if (p.hand.find(c => c.id === '2-CLUBS')) starter = i; });
+       players.forEach((p, i) => { if (p.hand.some(c => c && c.id === '2-CLUBS')) starter = i; });
        setGameState(prev => ({ ...prev, turnIndex: starter }));
        setMessage("Round 4: No Pass. 2 of Clubs leads.");
     } else {
@@ -76,8 +87,11 @@ export default function App() {
   const playCard = useCallback((playerId: number, cardId: string) => {
     setGameState(prev => {
       const player = prev.players[playerId];
-      const card = player.hand.find(c => c.id === cardId)!;
-      const newHand = player.hand.filter(c => c.id !== cardId);
+      if (!player) return prev;
+      const card = player.hand.find(c => c && c.id === cardId);
+      if (!card) return prev;
+
+      const newHand = player.hand.filter(c => c && c.id !== cardId);
       const newPlayers = prev.players.map(p => p.id === playerId ? { ...p, hand: newHand } : p);
       const newTrick = [...prev.currentTrick, { playerId, card }];
       let newLeadSuit = prev.currentTrick.length === 0 ? card.suit : prev.leadSuit;
@@ -101,10 +115,13 @@ export default function App() {
 
     setGameState(prev => {
       const passedCardsByPlayer: Record<number, Card[]> = {};
+      
       prev.players.forEach(p => {
         if (p.isHuman) {
-          passedCardsByPlayer[p.id] = p.hand.filter(c => prev.passingCards.includes(c.id));
+          // Explicitly filter to ensure we only get valid existing cards
+          passedCardsByPlayer[p.id] = p.hand.filter(c => c && prev.passingCards.includes(c.id));
         } else {
+          // AI simple pass logic: pass the 3 "worst" cards (highest scoring or highest value)
           const sorted = [...p.hand].sort((a, b) => {
              const weight = (c: Card) => (c.id === 'Q-SPADES' ? 1000 : c.suit === 'HEARTS' ? 100 + c.value : c.value);
              return weight(b) - weight(a);
@@ -115,19 +132,33 @@ export default function App() {
 
       const newPlayers = prev.players.map(p => {
         const sourcePlayerId = (p.id - shift + 4) % 4;
-        const receivingCards = passedCardsByPlayer[sourcePlayerId];
-        const removedCards = passedCardsByPlayer[p.id];
-        const remainingHand = p.hand.filter(c => !removedCards.some(rc => rc.id === c.id));
+        const receivingCards = passedCardsByPlayer[sourcePlayerId] || [];
+        const removedCards = passedCardsByPlayer[p.id] || [];
+        
+        // Safety: ensure rc and its ID exist before comparison
+        const remainingHand = p.hand.filter(c => c && !removedCards.some(rc => rc && rc.id === c.id));
+        
         const updatedHand = [...remainingHand, ...receivingCards].sort((a, b) => {
+           if (!a || !b) return 0;
            if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
            return b.value - a.value;
         });
+        
         return { ...p, hand: updatedHand };
       });
 
       let starter = 0;
-      newPlayers.forEach((p, i) => { if (p.hand.find(c => c.id === '2-CLUBS')) starter = i; });
-      return { ...prev, players: newPlayers, phase: 'PLAYING', turnIndex: starter, passingCards: [] };
+      newPlayers.forEach((p, i) => { 
+        if (p.hand.some(c => c && c.id === '2-CLUBS')) starter = i; 
+      });
+
+      return { 
+        ...prev, 
+        players: newPlayers, 
+        phase: 'PLAYING', 
+        turnIndex: starter, 
+        passingCards: [] 
+      };
     });
     setMessage("");
   };
@@ -152,7 +183,7 @@ export default function App() {
         setIsProcessing(true);
         const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
         const cardId = await getBestMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, activePlayer.name);
-        playCard(gameState.turnIndex, cardId);
+        if (cardId) playCard(gameState.turnIndex, cardId);
         setIsProcessing(false);
       };
       runAi();
@@ -162,13 +193,17 @@ export default function App() {
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
       const timer = setTimeout(() => {
-        const leadSuit = gameState.currentTrick[0].card.suit;
-        const winner = gameState.currentTrick.reduce((w, c) => (c.card.suit === leadSuit && c.card.value > w.card.value ? c : w), gameState.currentTrick[0]);
+        const firstCard = gameState.currentTrick[0];
+        if (!firstCard) return;
+
+        const leadSuit = firstCard.card.suit;
+        const winner = gameState.currentTrick.reduce((w, c) => (c.card.suit === leadSuit && c.card.value > w.card.value ? c : w), firstCard);
+        
         setClearingTrick({ winnerId: winner.playerId });
 
         setTimeout(() => {
           setGameState(prev => {
-            const points = prev.currentTrick.reduce((s, t) => s + t.card.points, 0);
+            const points = prev.currentTrick.reduce((s, t) => s + (t.card?.points || 0), 0);
             const newPlayers = prev.players.map(p => p.id === winner.playerId ? { ...p, currentRoundScore: p.currentRoundScore + points } : p);
             
             if (newPlayers[0].hand.length === 0) {
@@ -185,8 +220,8 @@ export default function App() {
             return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId };
           });
           setClearingTrick(null);
-        }, 800);
-      }, 1000);
+        }, 850);
+      }, 800);
       return () => clearTimeout(timer);
     }
   }, [gameState.currentTrick]);
@@ -194,17 +229,17 @@ export default function App() {
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
     const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
-    const hasLeadSuit = gameState.players[0].hand.some(c => c.suit === gameState.leadSuit);
+    const hasLeadSuit = gameState.players[0].hand.some(c => c && c.suit === gameState.leadSuit);
 
     if (isFirstTrick && !gameState.leadSuit && card.id !== '2-CLUBS') { setMessage("Lead with 2 of Clubs"); return; }
     if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) { setMessage(`Must follow ${gameState.leadSuit}`); return; }
     if (isFirstTrick && (card.suit === 'HEARTS' || card.id === 'Q-SPADES')) {
-       if (!gameState.players[0].hand.every(c => c.suit === 'HEARTS' || c.id === 'Q-SPADES')) {
+       if (!gameState.players[0].hand.every(c => c && (c.suit === 'HEARTS' || c.id === 'Q-SPADES'))) {
           setMessage("No points on first trick"); return;
        }
     }
     if (!gameState.leadSuit && card.suit === 'HEARTS' && !gameState.heartsBroken) {
-      if (!gameState.players[0].hand.every(c => c.suit === 'HEARTS')) { setMessage("Hearts not broken yet"); return; }
+      if (!gameState.players[0].hand.every(c => c && c.suit === 'HEARTS')) { setMessage("Hearts not broken yet"); return; }
     }
     playCard(0, card.id);
     setMessage("");
@@ -234,7 +269,6 @@ export default function App() {
 
   return (
     <div className="h-screen w-full flex flex-col felt-bg select-none relative overflow-hidden">
-      {/* Header HUD */}
       <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/20 pb-4 backdrop-blur-md border-b border-white/5">
         <button onClick={() => setScreen('MENU')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
         <div className="text-center">
@@ -245,35 +279,30 @@ export default function App() {
       </div>
 
       <div className="flex-1 relative flex flex-col pt-16">
-        {/* Avatars Cross Layout */}
-        <Avatar player={gameState.players[2]} pos="top-4 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-6 -translate-y-1/2" active={gameState.turnIndex === 3} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-6 -translate-y-1/2" active={gameState.turnIndex === 1} />
+        <Avatar player={gameState.players[2]} pos="top-4 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-6 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-6 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} />
+        <Avatar player={gameState.players[0]} pos="bottom-52 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} />
 
-        {/* Center Trick Pot Area */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[22rem] h-[22rem] flex items-center justify-center z-20">
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03]">
               <span className="text-[20rem] text-white">♥</span>
           </div>
 
-          {gameState.phase !== 'PASSING' && gameState.currentTrick.map((t, playIdx) => {
-             // Card placement in center (spread out to be visible)
+          {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
              const spread = 95;
              const offsets = [
-               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },    // YOU
-               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },   // FISH
-               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },  // SNAKE
-               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' } // SHRIMP
+               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },
+               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },
+               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },
+               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' }
              ];
-             const off = offsets[t.playerId];
-             
-             // Where cards fly to when trick ends
-             // Targets based on avatar positions
+             const off = offsets[t.playerId] || { x:0, y:0, start:'scale(0)', rot:'0deg' };
              const winPositions = [
-                { x: 0, y: 350 },  // YOU (Bottom)
-                { x: 180, y: 0 },  // FISH (Right)
-                { x: 0, y: -350 }, // SNAKE (Top)
-                { x: -180, y: 0 }  // SHRIMP (Left)
+                { x: 0, y: 450 },
+                { x: 300, y: 0 },
+                { x: 0, y: -450 },
+                { x: -300, y: 0 }
              ];
              const winDir = winPositions[clearingTrick?.winnerId ?? 0];
 
@@ -295,16 +324,15 @@ export default function App() {
           })}
         </div>
 
-        {/* Passing UI */}
         {gameState.phase === 'PASSING' && (
           <div className="absolute top-[35%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
                 {[0,1,2].map(i => {
                   const cardId = gameState.passingCards[i];
-                  const card = gameState.players[0].hand.find(c => c.id === cardId);
+                  const card = gameState.players[0].hand.find(c => c && c.id === cardId);
                   return (
-                    <div key={i} className="w-18 h-26 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300">
+                    <div key={i} className="w-16 h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300">
                        {card ? <CardView card={card} size="sm" /> : <div className="text-white/5 text-5xl font-black">?</div>}
                     </div>
                   );
@@ -320,7 +348,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Alerts Banner */}
         <div className="absolute top-[22%] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
            {message && (
              <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-xs font-black uppercase shadow-2xl border-2 border-white/20 animate-fan leading-tight">
@@ -330,14 +357,13 @@ export default function App() {
         </div>
       </div>
 
-      {/* Player Hand */}
       <div className="relative h-48 w-full flex justify-center items-end px-4 pb-[calc(1rem+var(--safe-bottom))] z-40 bg-gradient-to-t from-black/30 to-transparent">
         <div className="relative flex justify-center items-end h-full w-full max-w-2xl">
            {gameState.players[0].hand.map((card, idx, arr) => {
+             if (!card) return null;
              const count = arr.length;
              const mid = (count - 1) / 2;
              const diff = idx - mid;
-             
              const tx = diff * handSpacing;
              const ty = Math.abs(diff) * 1.8;
              const rot = diff * 1.2;
@@ -361,18 +387,19 @@ export default function App() {
         </div>
       </div>
 
-      {/* Navigation Footer */}
       <div className="flex justify-around items-center h-20 bg-black/95 backdrop-blur-2xl border-t border-white/5 pb-[var(--safe-bottom)] z-50">
         <NavItem icon="🃏" label="Games" />
-        <NavItem icon="ℹ️" label="Info" />
+        <NavItem icon="ℹ&nbsp;" label="Info" />
         <NavItem icon="🎴" label="Play" active />
         <NavItem icon="💡" label="Hint" />
         <NavItem icon="🛡️" label="Tiers" />
       </div>
 
-      {/* Result Overlays */}
-      {gameState.phase === 'ROUND_END' && (
-        <Overlay title="ROUND OVER" subtitle="Final Standings">
+      {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
+        <Overlay 
+          title={gameState.phase === 'GAME_OVER' ? "GAME OVER" : "ROUND OVER"} 
+          subtitle={gameState.phase === 'GAME_OVER' ? "Final Standings" : "Round Standings"}
+        >
             <div className="w-full space-y-3 mb-10">
                {gameState.players.map(p => (
                  <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-3xl border border-white/10 shadow-inner">
@@ -390,10 +417,16 @@ export default function App() {
                ))}
             </div>
             <button 
-              onClick={() => setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1}))} 
+              onClick={() => {
+                if (gameState.phase === 'GAME_OVER') {
+                  setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'}));
+                } else {
+                  setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1}));
+                }
+              }} 
               className="w-full py-6 bg-green-600 rounded-[2.5rem] font-black text-2xl uppercase border-b-8 border-green-800 active:translate-y-2 transition-all shadow-xl"
             >
-              NEXT ROUND
+              {gameState.phase === 'GAME_OVER' ? "RESTART GAME" : "NEXT ROUND"}
             </button>
         </Overlay>
       )}
@@ -401,10 +434,11 @@ export default function App() {
   );
 }
 
-function Avatar({ player, pos, active }: { player: Player, pos: string, active: boolean }) {
+function Avatar({ player, pos, active, isWinner = false }: { player: Player, pos: string, active: boolean, isWinner?: boolean }) {
+  if (!player) return null;
   return (
     <div className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'scale-110 drop-shadow-[0_0_20px_rgba(250,204,21,0.4)]' : 'opacity-40 scale-90'}`}>
-      <div className={`w-18 h-18 rounded-[1.4rem] flex items-center justify-center text-4xl shadow-2xl border-2 transition-all ${active ? 'bg-yellow-400 border-yellow-200' : 'bg-black/40 border-white/10'}`}>
+      <div className={`w-18 h-18 rounded-[1.4rem] flex items-center justify-center text-4xl shadow-2xl border-2 transition-all ${active ? 'bg-yellow-400 border-yellow-200' : 'bg-black/40 border-white/10'} ${isWinner ? 'winner-glow' : ''}`}>
         {player.avatar}
       </div>
       <div className={`px-3 py-1 rounded-full text-[9px] font-black mt-2 uppercase tracking-widest shadow-md ${active ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/50'}`}>
@@ -425,39 +459,28 @@ function NavItem({ icon, label, active = false }: { icon: string, label: string,
   );
 }
 
-function Overlay({ title, subtitle, children }: { title: string, subtitle: string, children: React.ReactNode }) {
-  return (
-    <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-10 text-center animate-play">
-       <h2 className="text-7xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl">{title}</h2>
-       <p className="text-white/30 text-[11px] font-black uppercase tracking-[0.5em] mb-12">{subtitle}</p>
-       <div className="w-full max-w-sm">{children}</div>
-    </div>
-  );
-}
-
 function CardView({ card, size = 'md' }: { card: Card, size?: 'sm' | 'md' | 'lg' }) {
-  const dims = size === 'sm' ? 'w-16 h-24 p-2' : size === 'md' ? 'w-20 h-30 p-2.5' : 'w-22 h-34 p-3';
-  const rankStyle = size === 'sm' ? 'text-sm' : size === 'md' ? 'text-base' : 'text-xl';
-  const symStyle = size === 'sm' ? 'text-3xl' : size === 'md' ? 'text-4xl' : 'text-5xl';
+  if (!card) return null;
+  const dims = size === 'sm' ? 'w-16 h-24 p-1' : size === 'md' ? 'w-20 h-28 p-1.5' : 'w-24 h-34 p-2';
+  const rankStyle = size === 'sm' ? 'text-lg' : size === 'md' ? 'text-xl' : 'text-2xl';
   const cornerSymStyle = size === 'sm' ? 'text-[10px]' : size === 'md' ? 'text-xs' : 'text-sm';
-  const hugeIconStyle = size === 'sm' ? 'text-5xl' : size === 'md' ? 'text-6xl' : 'text-7xl';
+  const brSymStyle = size === 'sm' ? 'text-xl' : size === 'md' ? 'text-2xl' : 'text-3xl';
+  const hugeIconStyle = size === 'sm' ? 'text-6xl' : size === 'md' ? 'text-7xl' : 'text-8xl';
   
   return (
-    <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-center justify-between border-b-[6px] border-gray-300 ${SUIT_COLORS[card.suit]} relative overflow-hidden transition-all duration-300`}>
-      <div className="w-full flex flex-col items-start leading-none gap-0.5 z-10">
+    <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start border-b-[6px] border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300`}>
+      <div className="flex flex-col items-start leading-none z-10">
           <div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div>
-          <div className={`${cornerSymStyle}`}>{SUIT_SYMBOLS[card.suit]}</div>
+          <div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
       </div>
       
-      <div className={`${symStyle} leading-none drop-shadow-sm z-10`}>
-          {SUIT_SYMBOLS[card.suit]}
-      </div>
-      
-      <div className={`absolute -bottom-2 -right-2 opacity-[0.12] ${hugeIconStyle} leading-none pointer-events-none rotate-[-15deg]`}>
+      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.06] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>
           {SUIT_SYMBOLS[card.suit]}
       </div>
 
-      <div className="w-full h-1 z-10"></div>
+      <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>
+          {SUIT_SYMBOLS[card.suit]}
+      </div>
     </div>
   );
 }
