@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { GameState, Player, Card, GamePhase, Suit, ScreenState } from './types';
 import { createDeck, shuffle, SUIT_SYMBOLS, SUIT_COLORS } from './constants';
 import { getBestMove } from './services/geminiService';
@@ -11,9 +11,10 @@ const INITIAL_PLAYERS: Player[] = [
 ];
 
 const TARGET_SCORE = 100;
+const DRAG_THRESHOLD = 80;
 
 // Reusable Overlay component
-function Overlay({ title, subtitle, children }: { title: string, subtitle: string, children: React.ReactNode }) {
+function Overlay({ title, subtitle, children }: { title: string, subtitle: string, children?: React.ReactNode }) {
   return (
     <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-10 text-center animate-play">
        <h2 className="text-7xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl">{title}</h2>
@@ -40,6 +41,9 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [clearingTrick, setClearingTrick] = useState<{ winnerId: number } | null>(null);
+
+  // Drag state
+  const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
   const startRound = useCallback(() => {
     const deck = shuffle(createDeck());
@@ -118,10 +122,8 @@ export default function App() {
       
       prev.players.forEach(p => {
         if (p.isHuman) {
-          // Explicitly filter to ensure we only get valid existing cards
           passedCardsByPlayer[p.id] = p.hand.filter(c => c && prev.passingCards.includes(c.id));
         } else {
-          // AI simple pass logic: pass the 3 "worst" cards (highest scoring or highest value)
           const sorted = [...p.hand].sort((a, b) => {
              const weight = (c: Card) => (c.id === 'Q-SPADES' ? 1000 : c.suit === 'HEARTS' ? 100 + c.value : c.value);
              return weight(b) - weight(a);
@@ -135,7 +137,6 @@ export default function App() {
         const receivingCards = passedCardsByPlayer[sourcePlayerId] || [];
         const removedCards = passedCardsByPlayer[p.id] || [];
         
-        // Safety: ensure rc and its ID exist before comparison
         const remainingHand = p.hand.filter(c => c && !removedCards.some(rc => rc && rc.id === c.id));
         
         const updatedHand = [...remainingHand, ...receivingCards].sort((a, b) => {
@@ -247,9 +248,87 @@ export default function App() {
 
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
-    const availableWidth = window.innerWidth - 60;
-    return Math.min(26, availableWidth / Math.max(1, count - 1));
+    // Keep cards fully clickable by ensuring enough horizontal margin
+    const availableWidth = window.innerWidth - 140; 
+    return Math.min(32, availableWidth / Math.max(1, count - 1));
   }, [gameState.players[0].hand.length]);
+
+  // Determine legal moves for visual feedback
+  const legalCardIds = useMemo(() => {
+    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0) return null;
+    
+    const hand = gameState.players[0].hand;
+    const isFirstTrick = gameState.players.reduce((sum, p) => sum + p.hand.length, 0) === 52;
+    const hasLeadSuit = hand.some(c => c && c.suit === gameState.leadSuit);
+    const set = new Set<string>();
+    
+    hand.forEach(card => {
+        if (!card) return;
+        let isLegal = true;
+        
+        if (!gameState.leadSuit) {
+            // Player is leading
+            if (isFirstTrick) {
+                isLegal = card.id === '2-CLUBS';
+            } else {
+                if (card.suit === 'HEARTS' && !gameState.heartsBroken) {
+                    const onlyHearts = hand.every(c => !c || c.suit === 'HEARTS');
+                    isLegal = onlyHearts;
+                }
+            }
+        } else {
+            // Player is following
+            if (hasLeadSuit) {
+                isLegal = card.suit === gameState.leadSuit;
+            } else {
+                // Discarding
+                if (isFirstTrick) {
+                    const isPointCard = card.suit === 'HEARTS' || card.id === 'Q-SPADES';
+                    const onlyPoints = hand.every(c => !c || c.suit === 'HEARTS' || c.id === 'Q-SPADES');
+                    if (isPointCard && !onlyPoints) isLegal = false;
+                }
+            }
+        }
+        if (isLegal) set.add(card.id);
+    });
+    return set;
+  }, [gameState]);
+
+  // Handle Drag Events
+  const onDragStart = (e: React.TouchEvent | React.MouseEvent, cardId: string) => {
+    const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    setDragInfo({ id: cardId, startY: y, currentY: y });
+  };
+
+  const onDragMove = (e: React.TouchEvent | React.MouseEvent) => {
+    if (!dragInfo) return;
+    const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    // Only allow dragging upwards (currentY should be less than startY)
+    setDragInfo(prev => prev ? { ...prev, currentY: Math.min(prev.startY, y) } : null);
+  };
+
+  const onDragEnd = (card: Card) => {
+    if (!dragInfo) return;
+    const deltaY = dragInfo.startY - dragInfo.currentY;
+    
+    if (deltaY > 10) {
+      if (deltaY >= DRAG_THRESHOLD) {
+         if (gameState.phase === 'PASSING') {
+           togglePassingCard(card.id);
+         } else {
+           handleHumanPlay(card);
+         }
+      }
+    } else {
+      // Tap behavior
+      if (gameState.phase === 'PASSING') {
+        togglePassingCard(card.id);
+      } else {
+        handleHumanPlay(card);
+      }
+    }
+    setDragInfo(null);
+  };
 
   if (screen === 'MENU') {
     return (
@@ -268,7 +347,13 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-full flex flex-col felt-bg select-none relative overflow-hidden">
+    <div 
+      className="h-screen w-full flex flex-col felt-bg select-none relative overflow-hidden"
+      onMouseMove={onDragMove}
+      onMouseUp={() => dragInfo && setDragInfo(null)}
+      onTouchMove={onDragMove}
+      onTouchEnd={() => dragInfo && setDragInfo(null)}
+    >
       <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/20 pb-4 backdrop-blur-md border-b border-white/5">
         <button onClick={() => setScreen('MENU')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
         <div className="text-center">
@@ -332,7 +417,11 @@ export default function App() {
                   const cardId = gameState.passingCards[i];
                   const card = gameState.players[0].hand.find(c => c && c.id === cardId);
                   return (
-                    <div key={i} className="w-16 h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300">
+                    <div 
+                      key={i} 
+                      onClick={() => cardId && togglePassingCard(cardId)}
+                      className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300 ${cardId ? 'cursor-pointer active:scale-95' : ''}`}
+                    >
                        {card ? <CardView card={card} size="sm" /> : <div className="text-white/5 text-5xl font-black">?</div>}
                     </div>
                   );
@@ -341,9 +430,9 @@ export default function App() {
              <button 
               onClick={handlePass}
               disabled={gameState.passingCards.length < 3}
-              className={`mt-10 px-16 py-4 rounded-full font-black text-2xl shadow-[0_15px_30px_rgba(0,0,0,0.5)] transition-all duration-300 ${gameState.passingCards.length === 3 ? 'bg-blue-600 border-b-4 border-blue-800 scale-100 active:scale-95' : 'bg-gray-800/80 opacity-40 scale-90 grayscale'}`}
+              className={`mt-6 px-10 py-3 rounded-2xl font-black text-xl shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all duration-300 ${gameState.passingCards.length === 3 ? 'bg-blue-600 border-b-4 border-blue-800 scale-100 active:scale-95' : 'bg-gray-800/80 opacity-40 scale-90 grayscale'}`}
             >
-              Confirm Selection
+              Pass Cards
             </button>
           </div>
         )}
@@ -365,23 +454,38 @@ export default function App() {
              const mid = (count - 1) / 2;
              const diff = idx - mid;
              const tx = diff * handSpacing;
-             const ty = Math.abs(diff) * 1.8;
+             const ty = Math.abs(diff) * 2.2; 
              const rot = diff * 1.2;
+             
              const isSel = gameState.passingCards.includes(card.id);
+             const isLegal = legalCardIds ? legalCardIds.has(card.id) : true;
+             const showInactive = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isLegal;
+
+             const isDragging = dragInfo?.id === card.id;
+             const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
+             const willPlay = isDragging && Math.abs(dragOffset) >= DRAG_THRESHOLD;
 
              return (
-                <button 
+                <div 
                   key={card.id}
-                  onClick={() => gameState.phase === 'PASSING' ? togglePassingCard(card.id) : handleHumanPlay(card)}
-                  className={`absolute card-fan-item animate-deal ${isSel ? '-translate-y-32 opacity-40 scale-75' : ''}`}
+                  onMouseDown={(e) => onDragStart(e, card.id)}
+                  onTouchStart={(e) => onDragStart(e, card.id)}
+                  onMouseUp={() => onDragEnd(card)}
+                  onTouchEnd={() => onDragEnd(card)}
+                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${isSel ? '-translate-y-32 opacity-40 scale-75' : ''} ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none' : ''}`}
                   style={{ 
-                    transform: `translateX(${tx}px) translateY(${ty}px) rotate(${rot}deg)`,
-                    zIndex: 100 + idx,
+                    transform: `translateX(${tx}px) translateY(${ty + dragOffset}px) rotate(${isDragging ? 0 : rot}deg) scale(${willPlay ? 1.15 : 1})`,
+                    zIndex: isDragging ? 500 : 100 + idx,
                     animationDelay: `${idx * 0.03}s`
                   }}
                 >
-                  <CardView card={card} size="lg" />
-                </button>
+                  <CardView card={card} size="lg" inactive={showInactive} highlighted={willPlay} />
+                  {willPlay && (
+                    <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-yellow-400 text-black font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-tighter whitespace-nowrap animate-bounce shadow-lg">
+                      Release to Play
+                    </div>
+                  )}
+                </div>
              );
            })}
         </div>
@@ -459,16 +563,20 @@ function NavItem({ icon, label, active = false }: { icon: string, label: string,
   );
 }
 
-function CardView({ card, size = 'md' }: { card: Card, size?: 'sm' | 'md' | 'lg' }) {
+function CardView({ card, size = 'md', inactive = false, highlighted = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean }) {
   if (!card) return null;
-  const dims = size === 'sm' ? 'w-16 h-24 p-1' : size === 'md' ? 'w-20 h-28 p-1.5' : 'w-24 h-34 p-2';
+  // Aspect Ratio 2.25:3 = 0.75
+  // sm: w-[4.5rem] (72px) h-24 (96px) -> 72/96 = 0.75
+  // md: w-[5.625rem] (90px) h-[7.5rem] (120px) -> 90/120 = 0.75
+  // lg: w-[6.75rem] (108px) h-36 (144px) -> 108/144 = 0.75
+  const dims = size === 'sm' ? 'w-[4.5rem] h-24 p-1' : size === 'md' ? 'w-[5.625rem] h-[7.5rem] p-1.5' : 'w-[6.75rem] h-36 p-2';
   const rankStyle = size === 'sm' ? 'text-lg' : size === 'md' ? 'text-xl' : 'text-2xl';
   const cornerSymStyle = size === 'sm' ? 'text-[10px]' : size === 'md' ? 'text-xs' : 'text-sm';
   const brSymStyle = size === 'sm' ? 'text-xl' : size === 'md' ? 'text-2xl' : 'text-3xl';
   const hugeIconStyle = size === 'sm' ? 'text-6xl' : size === 'md' ? 'text-7xl' : 'text-8xl';
   
   return (
-    <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start border-b-[6px] border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300`}>
+    <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start ${inactive ? '' : 'border-b-[6px]'} border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300 ${highlighted ? 'ring-4 ring-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)]' : ''}`}>
       <div className="flex flex-col items-start leading-none z-10">
           <div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div>
           <div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
@@ -481,6 +589,10 @@ function CardView({ card, size = 'md' }: { card: Card, size?: 'sm' | 'md' | 'lg'
       <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>
           {SUIT_SYMBOLS[card.suit]}
       </div>
+
+      {inactive && (
+        <div className="absolute inset-0 bg-black/10 backdrop-blur-[0.5px]" />
+      )}
     </div>
   );
 }
