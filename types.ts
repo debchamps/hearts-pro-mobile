@@ -1,3 +1,4 @@
+
 export type Suit = 'HEARTS' | 'DIAMONDS' | 'CLUBS' | 'SPADES';
 export type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
 
@@ -9,10 +10,13 @@ export interface Card {
   points: number;
 }
 
+export type GameType = 'HEARTS' | 'SPADES';
+
 export interface GameSettings {
   shootTheMoon: boolean;
   noPassing: boolean;
   jackOfDiamonds: boolean;
+  targetScore: number;
 }
 
 export interface Player {
@@ -23,6 +27,9 @@ export interface Player {
   score: number;
   currentRoundScore: number;
   isHuman: boolean;
+  bid?: number;
+  tricksWon?: number;
+  teamId?: number; // 0 for Team Blue (0, 2), 1 for Team Red (1, 3)
 }
 
 export interface TrickCard {
@@ -30,18 +37,22 @@ export interface TrickCard {
   card: Card;
 }
 
-export type GamePhase = 'DEALING' | 'PASSING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
+export type GamePhase = 'DEALING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
 export type ScreenState = 'HOME' | 'MENU' | 'GAME' | 'SETTINGS';
 
 export interface GameState {
+  gameType: GameType;
   players: Player[];
   dealerIndex: number;
   turnIndex: number;
   leadSuit: Suit | null;
   currentTrick: TrickCard[];
   heartsBroken: boolean;
+  spadesBroken: boolean;
   phase: GamePhase;
   roundNumber: number;
-  passingCards: string[]; // IDs of cards selected for passing
+  passingCards: string[];
   settings: GameSettings;
+  teamScores: [number, number]; // [Team Blue, Team Red]
+  teamBags: [number, number]; // [Team Blue, Team Red]
 }
