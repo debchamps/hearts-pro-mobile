@@ -47,13 +47,15 @@ export default function App() {
     heartsBroken: false,
     phase: 'DEALING',
     roundNumber: 1,
-    passingCards: []
+    passingCards: ["", "", ""]
   });
 
   const [message, setMessage] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPassFinalized, setIsPassFinalized] = useState(false);
   const [clearingTrick, setClearingTrick] = useState<{ winnerId: number } | null>(null);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
+  const [receivedCards, setReceivedCards] = useState<string[]>([]);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
   const startRound = useCallback(() => {
@@ -85,11 +87,13 @@ export default function App() {
         currentTrick: [],
         leadSuit: null,
         heartsBroken: false,
-        passingCards: []
+        passingCards: ["", "", ""]
       };
     });
 
     setHintCardId(null);
+    setReceivedCards([]);
+    setIsPassFinalized(false);
     if (!isPassingRound) {
        setMessage("Round 4: No Pass. 2 of Clubs leads.");
     } else {
@@ -140,67 +144,90 @@ export default function App() {
   }, [soundEnabled]);
 
   const handlePass = () => {
-    if (gameState.passingCards.length !== 3) return;
+    const activePassCount = gameState.passingCards.filter(Boolean).length;
+    if (activePassCount !== 3 || isProcessing) return;
+    
+    setIsProcessing(true);
+    setIsPassFinalized(true);
+
     const cycle = (gameState.roundNumber - 1) % 4;
     const shift = cycle === 0 ? 1 : cycle === 1 ? 3 : 2;
 
-    setGameState(prev => {
-      const passedCardsByPlayer: Record<number, Card[]> = {};
-      
-      prev.players.forEach(p => {
-        if (p.isHuman) {
-          passedCardsByPlayer[p.id] = p.hand.filter(c => c && prev.passingCards.includes(c.id));
-        } else {
-          const sorted = [...p.hand].sort((a, b) => {
-             if (!a || !b) return 0;
-             const weight = (c: Card) => (c.id === 'Q-SPADES' ? 1000 : c.suit === 'HEARTS' ? 100 + c.value : c.value);
-             return weight(b) - weight(a);
-          });
-          passedCardsByPlayer[p.id] = sorted.slice(0, 3);
-        }
-      });
-
-      const newPlayers = prev.players.map(p => {
-        const sourcePlayerId = (p.id - shift + 4) % 4;
-        const receivingCards = passedCardsByPlayer[sourcePlayerId] || [];
-        const removedCards = passedCardsByPlayer[p.id] || [];
-        const remainingHand = p.hand.filter(c => c && !removedCards.some(rc => rc && rc.id === c.id));
-        const updatedHand = [...remainingHand, ...receivingCards].sort((a, b) => {
+    const passedCardsByPlayer: Record<number, Card[]> = {};
+    gameState.players.forEach(p => {
+      if (p.isHuman) {
+        passedCardsByPlayer[p.id] = p.hand.filter(c => c && gameState.passingCards.includes(c.id));
+      } else {
+        const sorted = [...p.hand].sort((a, b) => {
            if (!a || !b) return 0;
-           if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-           return b.value - a.value;
+           const weight = (c: Card) => (c.id === 'Q-SPADES' ? 1000 : c.suit === 'HEARTS' ? 100 + c.value : c.value);
+           return weight(b) - weight(a);
         });
-        return { ...p, hand: updatedHand };
-      });
-
-      let starter = 0;
-      newPlayers.forEach((p, i) => { 
-        if (p.hand.some(c => c && c.id === '2-CLUBS')) starter = i; 
-      });
-
-      return { 
-        ...prev, 
-        players: newPlayers, 
-        phase: 'PLAYING', 
-        turnIndex: starter, 
-        passingCards: [] 
-      };
+        passedCardsByPlayer[p.id] = sorted.slice(0, 3);
+      }
     });
-    setMessage("");
+
+    const newPlayers = gameState.players.map(p => {
+      const sourcePlayerId = (p.id - shift + 4) % 4;
+      const receivingCards = passedCardsByPlayer[sourcePlayerId] || [];
+      const removedCards = passedCardsByPlayer[p.id] || [];
+      const remainingHand = p.hand.filter(c => c && !removedCards.some(rc => rc && rc.id === c.id));
+      const updatedHand = [...remainingHand, ...receivingCards].sort((a, b) => {
+         if (!a || !b) return 0;
+         if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
+         return b.value - a.value;
+      });
+
+      if (p.id === 0) {
+         setReceivedCards(receivingCards.map(c => c.id));
+      }
+      return { ...p, hand: updatedHand };
+    });
+
+    let starter = 0;
+    newPlayers.forEach((p, i) => { 
+      if (p.hand.some(c => c && c.id === '2-CLUBS')) starter = i; 
+    });
+
+    // Swap hands and clear passing selections immediately
+    setGameState(prev => ({ 
+      ...prev, 
+      players: newPlayers, 
+      passingCards: ["", "", ""] 
+    }));
+
+    // Wait 2.5 seconds for the user to see received cards before starting
+    setTimeout(() => {
+      setGameState(prev => ({
+        ...prev,
+        phase: 'PLAYING',
+        turnIndex: starter
+      }));
+      setReceivedCards([]);
+      setIsProcessing(false);
+      setMessage("");
+    }, 2500);
   };
 
   const togglePassingCard = useCallback((cardId: string) => {
     setGameState(prev => {
-      if (prev.phase !== 'PASSING') return prev;
-      const isSelected = prev.passingCards.includes(cardId);
-      if (isSelected) {
-        return { ...prev, passingCards: prev.passingCards.filter(id => id !== cardId) };
+      if (prev.phase !== 'PASSING' || isPassFinalized) return prev;
+      const currentPass = [...prev.passingCards];
+      const existingIdx = currentPass.indexOf(cardId);
+      
+      if (existingIdx !== -1) {
+        currentPass[existingIdx] = "";
+        return { ...prev, passingCards: currentPass };
       } else {
-        if (prev.passingCards.length >= 3) return prev;
-        return { ...prev, passingCards: [...prev.passingCards, cardId] };
+        const firstEmpty = currentPass.findIndex(id => !id);
+        if (firstEmpty !== -1) {
+          currentPass[firstEmpty] = cardId;
+          return { ...prev, passingCards: currentPass };
+        }
+        return prev;
       }
     });
-  }, []);
+  }, [isPassFinalized]);
 
   const handleHint = async () => {
     if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0 || clearingTrick || isProcessing) return;
@@ -313,19 +340,11 @@ export default function App() {
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
-    
-    // We want the left card at margin 16px.
-    // We want the right-most card at 50% visibility.
-    // cardWidth = 108px. 50% visible means right edge = window.innerWidth + 54px.
     const leftMargin = 16;
-    const cardWidth = 108;
+    const cardWidth = 86.4; 
     const targetRightEdge = window.innerWidth + (cardWidth / 2);
-    
-    // Total Span = (targetRightEdge) - (leftMargin) - (cardWidth)
     const availableSpan = targetRightEdge - leftMargin - cardWidth;
     const spacing = availableSpan / (count - 1);
-    
-    // Ensure we don't go too crazy, but generally this allows wide spread.
     return Math.max(16, Math.min(60, spacing));
   }, [gameState.players[0].hand.length]);
 
@@ -365,7 +384,7 @@ export default function App() {
   }, [gameState]);
 
   const onDragStart = (e: React.TouchEvent | React.MouseEvent, cardId: string) => {
-    if (dragInfo) return; 
+    if (dragInfo || isProcessing) return; 
     e.stopPropagation(); 
     const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
     setDragInfo({ id: cardId, startY: y, currentY: y });
@@ -455,7 +474,6 @@ export default function App() {
           isWinner={clearingTrick?.winnerId === 1}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 1}
         />
-        {/* You avatar moved to the absolute bottom of the game area */}
         <Avatar 
           player={gameState.players[0]} 
           pos="bottom-0 left-1/2 -translate-x-1/2" 
@@ -481,7 +499,7 @@ export default function App() {
           )}
 
           {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
-             const spread = 55; 
+             const spread = 44; 
              const offsets = [
                { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },
                { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },
@@ -512,20 +530,20 @@ export default function App() {
           })}
         </div>
 
-        {gameState.phase === 'PASSING' && (
+        {gameState.phase === 'PASSING' && !isPassFinalized && (
           <div className="absolute top-[35%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
                 {[0,1,2].map(i => (
-                    <div key={i} className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}>
-                       <div className="text-white/5 text-5xl font-black">?</div>
+                    <div key={i} className={`w-[3.6rem] h-[4.8rem] rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}>
+                       <div className="text-white/5 text-4xl font-black">?</div>
                     </div>
                 ))}
              </div>
              <button 
               onClick={handlePass}
-              disabled={gameState.passingCards.length < 3}
-              className={`mt-6 px-10 py-3 rounded-2xl font-black text-xl shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all duration-300 ${gameState.passingCards.length === 3 ? 'bg-blue-600 border-b-4 border-blue-800 scale-100 active:scale-95' : 'bg-gray-800/80 opacity-40 scale-90 grayscale'}`}
+              disabled={gameState.passingCards.filter(Boolean).length < 3 || isProcessing}
+              className={`mt-6 px-10 py-3 rounded-2xl font-black text-xl shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all duration-300 ${gameState.passingCards.filter(Boolean).length === 3 && !isProcessing ? 'bg-blue-600 border-b-4 border-blue-800 scale-100 active:scale-95' : 'bg-gray-800/80 opacity-40 scale-90 grayscale'}`}
             >
               Pass Cards
             </button>
@@ -547,12 +565,11 @@ export default function App() {
              if (!card) return null;
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
-             
-             // Asymmetrical Fan logic:
-             // Left card anchored at 16px. Right card anchors off-screen based on spacing calculation.
              const leftMargin = 16;
-             const tx = isSel ? (pIdx * 90) + 40 : (idx * handSpacing) + leftMargin;
-             const ty = isSel ? -285 : (idx * 0.5); // Very subtle rising curve
+             const slotCenter = window.innerWidth / 2 - 43.2; 
+             
+             const tx = isSel ? (slotCenter + (pIdx - 1) * 76) : (idx * handSpacing) + leftMargin;
+             const ty = isSel ? -285 : (idx * 0.5); 
              
              const rot = isSel ? 0 : (idx - (arr.length/2)) * 0.8;
              const scale = isSel ? 0.66 : 1;
@@ -561,6 +578,8 @@ export default function App() {
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const willPlay = isDragging && Math.abs(dragOffset) >= DRAG_THRESHOLD;
+             const isHint = hintCardId === card.id;
+             const isNew = receivedCards.includes(card.id);
 
              return (
                 <div 
@@ -576,7 +595,7 @@ export default function App() {
                     animationDelay: `${idx * 0.03}s`
                   }}
                 >
-                  <CardView card={card} size="lg" inactive={showInactive} highlighted={willPlay} />
+                  <CardView card={card} size="lg" inactive={showInactive} highlighted={willPlay} hint={isHint} isNew={isNew} />
                   {willPlay && (
                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-yellow-400 text-black font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-tighter whitespace-nowrap animate-bounce shadow-lg">
                       Release to Play
@@ -650,17 +669,21 @@ function NavItem({ icon, label, active = false, onClick, disabled = false }: { i
   );
 }
 
-function CardView({ card, size = 'md', inactive = false, highlighted = false, hint = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean }) {
+function CardView({ card, size = 'md', inactive = false, highlighted = false, hint = false, isNew = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean, isNew?: boolean }) {
   if (!card) return null;
-  const dims = size === 'sm' ? 'w-[4.5rem] h-24 p-1' : size === 'md' ? 'w-[5.625rem] h-[7.5rem] p-1.5' : 'w-[6.75rem] h-36 p-2';
-  const rankStyle = size === 'sm' ? 'text-lg' : size === 'md' ? 'text-xl' : 'text-2xl';
-  const cornerSymStyle = size === 'sm' ? 'text-[10px]' : size === 'md' ? 'text-xs' : 'text-sm';
-  const brSymStyle = size === 'sm' ? 'text-xl' : size === 'md' ? 'text-2xl' : 'text-3xl';
-  const hugeIconStyle = size === 'sm' ? 'text-6xl' : size === 'md' ? 'text-7xl' : 'text-8xl';
-  const ringColor = hint ? 'ring-blue-400 shadow-[0_0_30px_rgba(59,130,246,0.8)]' : 'ring-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)]';
+  const dims = size === 'sm' ? 'w-[3.6rem] h-[4.8rem] p-1' : size === 'md' ? 'w-[4.5rem] h-[6rem] p-1.2' : 'w-[5.4rem] h-[7.2rem] p-1.5';
+  const rankStyle = size === 'sm' ? 'text-sm' : size === 'md' ? 'text-lg' : 'text-xl';
+  const cornerSymStyle = size === 'sm' ? 'text-[8px]' : size === 'md' ? 'text-[10px]' : 'text-xs';
+  const brSymStyle = size === 'sm' ? 'text-lg' : size === 'md' ? 'text-xl' : 'text-2xl';
+  const hugeIconStyle = size === 'sm' ? 'text-4xl' : size === 'md' ? 'text-5xl' : 'text-6xl';
+  
+  const showRing = highlighted || hint || isNew;
+  const ringColor = hint ? 'ring-blue-400 shadow-[0_0_30px_rgba(59,130,246,0.8)]' : 
+                    isNew ? 'ring-green-400 shadow-[0_0_40px_rgba(34,197,94,1)]' :
+                    'ring-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)]';
 
   return (
-    <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start ${inactive ? '' : 'border-b-[6px]'} border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300 ${highlighted ? `ring-4 ${ringColor}` : ''} ${hint ? 'animate-pulse' : ''}`}>
+    <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start ${inactive ? '' : 'border-b-[4px]'} border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300 ${showRing ? `ring-4 ${ringColor}` : ''} ${hint || isNew ? 'animate-pulse' : ''}`}>
       <div className="flex flex-col items-start leading-none z-10"><div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div><div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div></div>
       <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.06] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>{SUIT_SYMBOLS[card.suit]}</div>
       <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>{SUIT_SYMBOLS[card.suit]}</div>
