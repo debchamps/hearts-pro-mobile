@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { GameState, Player, Card, GamePhase, Suit, ScreenState, GameSettings } from './types';
 import { createDeck, shuffle, SUIT_SYMBOLS, SUIT_COLORS } from './constants';
 import { getBestMove } from './services/geminiService';
@@ -55,7 +55,7 @@ const GAMES_LIST: GameDescriptor[] = [
 
 // --- Sub-components ---
 
-function Overlay({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) {
+const Overlay = memo(({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) => {
   return (
     <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-6 text-center animate-play">
        <h2 className="text-5xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl uppercase">{title}</h2>
@@ -63,19 +63,9 @@ function Overlay({ title, subtitle, children, fullWidth = false }: { title: stri
        <div className={`w-full ${fullWidth ? 'max-w-xl' : 'max-w-sm'}`}>{children}</div>
     </div>
   );
-}
+});
 
-function NavItem({ icon, label, active = false, onClick, disabled = false }: { icon: string, label: string, active?: boolean, onClick?: () => void, disabled?: boolean }) {
-  return (
-    <button onClick={onClick} disabled={disabled} className={`flex flex-col items-center gap-1 transition-all duration-300 ${active ? 'text-yellow-500 scale-110' : 'text-white/20'} ${disabled ? 'opacity-20 pointer-events-none' : 'active:scale-90'}`}>
-      <span className="text-2xl">{icon}</span>
-      <span className="text-[9px] font-black uppercase tracking-widest">{label}</span>
-      {active && <div className="w-1 h-1 rounded-full bg-yellow-500 mt-1 shadow-[0_0_8px_yellow]" />}
-    </button>
-  );
-}
-
-function Avatar({ player, pos, active, isWinner = false }: { player: Player, pos: string, active: boolean, isWinner?: boolean }) {
+const Avatar = memo(({ player, pos, active, isWinner = false }: { player: Player, pos: string, active: boolean, isWinner?: boolean }) => {
   if (!player) return null;
   return (
     <div className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'opacity-100 scale-110' : 'opacity-60 scale-95'} ${isWinner ? 'scale-125' : ''}`}>
@@ -87,9 +77,9 @@ function Avatar({ player, pos, active, isWinner = false }: { player: Player, pos
       </div>
     </div>
   );
-}
+});
 
-function CardView({ card, size = 'md', inactive = false, highlighted = false, hint = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean }) {
+const CardView = memo(({ card, size = 'md', inactive = false, highlighted = false, hint = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean }) => {
   if (!card) return null;
   const dims = size === 'sm' ? 'w-[4rem] h-[5.33rem] p-1.5' : size === 'md' ? 'w-[5rem] h-[6.66rem] p-2' : 'w-[6.2rem] h-[8.2rem] p-2.5';
   const rankStyle = size === 'sm' ? 'text-sm' : size === 'md' ? 'text-lg' : 'text-xl';
@@ -108,7 +98,7 @@ function CardView({ card, size = 'md', inactive = false, highlighted = false, hi
       {inactive && <div className="absolute inset-0 bg-black/10 backdrop-blur-[0.5px]" />}
     </div>
   );
-}
+});
 
 // --- Main App ---
 
@@ -400,10 +390,9 @@ export default function App() {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
     
-    // Left Anchored layout
     const leftMargin = 16;
-    const cardWidthLg = 99.2; // roughly 6.2rem
-    const targetRightEdge = window.innerWidth + (cardWidthLg * 0.5); // Allow 50% bleed
+    const cardWidthLg = 99.2; 
+    const targetRightEdge = window.innerWidth + (cardWidthLg * 0.5); 
     
     const availableSpan = targetRightEdge - leftMargin - cardWidthLg;
     const spacing = availableSpan / (count - 1);
@@ -484,7 +473,13 @@ export default function App() {
                onClick={() => {
                   if (game.available) {
                     if (soundEnabled) playSound(SOUNDS.PLAY, 0.4);
-                    setScreen('MENU');
+                    setGameState(p => ({
+                      ...p, 
+                      players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), 
+                      roundNumber: 1, 
+                      phase: 'DEALING'
+                    }));
+                    setScreen('GAME');
                   }
                }}
                className={`relative aspect-[4/5] rounded-[2rem] p-5 flex flex-col items-center justify-between border-2 transition-all duration-300 ${game.available ? 'bg-black/40 border-white/10 active:scale-95 shadow-2xl cursor-pointer hover:border-white/20' : 'bg-black/60 border-white/5 opacity-50 grayscale cursor-not-allowed'}`}
@@ -503,44 +498,22 @@ export default function App() {
         </div>
 
         <div className="fixed bottom-0 left-0 right-0 h-20 bg-black/90 backdrop-blur-3xl border-t border-white/5 flex justify-around items-center px-4 pb-[var(--safe-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
-            <NavItem icon="🏠" label="Home" active />
-            <NavItem icon="🏆" label="Leaders" />
-            <NavItem icon="🤝" label="Social" />
-            <NavItem icon="⚙️" label="Config" onClick={() => setScreen('SETTINGS')} />
-        </div>
-      </div>
-    );
-  }
-
-  if (screen === 'MENU') {
-    return (
-      <div className="h-screen w-full flex flex-col items-center justify-center felt-bg overflow-hidden relative">
-        <button 
-          onClick={() => setScreen('HOME')}
-          className="absolute top-[var(--safe-top)] left-6 mt-4 w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform"
-        >
-          🏠
-        </button>
-        <div className="text-9xl mb-4 drop-shadow-2xl animate-bounce">♥️</div>
-        <h1 className="text-8xl font-black text-yellow-500 italic mb-2 tracking-tighter drop-shadow-lg text-center leading-[0.85]">HEARTS</h1>
-        <p className="text-white/40 text-[11px] tracking-[0.5em] font-bold mb-16 uppercase">Professional Offline Edition</p>
-        <div className="flex flex-col gap-4 w-full max-w-xs px-4">
-          <button 
-            onClick={() => { 
-                if (soundEnabled) playSound(SOUNDS.PLAY, 0.4); 
-                setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'})); 
-                setScreen('GAME'); 
-            }}
-            className="w-full py-6 bg-green-600 rounded-[2.5rem] text-3xl font-black shadow-2xl active:scale-95 transition-transform border-b-8 border-green-800"
-          >
-            START GAME
-          </button>
-          <button 
-            onClick={() => setScreen('SETTINGS')}
-            className="w-full py-4 bg-black/40 rounded-[2rem] text-xl font-bold border border-white/10 active:scale-95 transition-transform"
-          >
-            SETTINGS
-          </button>
+            <button className="flex flex-col items-center gap-1 text-yellow-500 scale-110">
+              <span className="text-2xl">🏠</span>
+              <span className="text-[9px] font-black uppercase tracking-widest">Home</span>
+            </button>
+            <button className="flex flex-col items-center gap-1 text-white/20">
+              <span className="text-2xl">🏆</span>
+              <span className="text-[9px] font-black uppercase tracking-widest">Leaders</span>
+            </button>
+            <button className="flex flex-col items-center gap-1 text-white/20">
+              <span className="text-2xl">🤝</span>
+              <span className="text-[9px] font-black uppercase tracking-widest">Social</span>
+            </button>
+            <button onClick={() => setScreen('SETTINGS')} className="flex flex-col items-center gap-1 text-white/20">
+              <span className="text-2xl">⚙️</span>
+              <span className="text-[9px] font-black uppercase tracking-widest">Config</span>
+            </button>
         </div>
       </div>
     );
@@ -587,9 +560,10 @@ export default function App() {
       onTouchMove={onDragMove}
       onTouchEnd={() => dragInfo && setDragInfo(null)}
     >
+      {/* Refined Top Header */}
       <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/60 pb-4 backdrop-blur-md border-b border-white/5 h-16 shadow-2xl">
         <div className="flex gap-2">
-            <button onClick={() => setScreen('SETTINGS')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
+            <button onClick={() => setScreen('HOME')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">🏠</button>
             <button onClick={() => setSoundEnabled(!soundEnabled)} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">
                 {soundEnabled ? '🔊' : '🔇'}
             </button>
@@ -598,42 +572,47 @@ export default function App() {
             <span className="text-[10px] text-white/50 font-black uppercase tracking-widest block mb-0.5 leading-none">Round</span>
             <span className="text-4xl font-black italic text-yellow-500 drop-shadow-md leading-none">{gameState.roundNumber}</span>
         </div>
-        <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform" onClick={() => setScreen('MENU')}>✖</div>
+        <div className="flex gap-2">
+            <button 
+              onClick={handleHint} 
+              disabled={gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING'}
+              className={`w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg transition-all ${gameState.turnIndex === 0 && gameState.phase === 'PLAYING' ? 'active:scale-90 opacity-100' : 'opacity-20 pointer-events-none'}`}
+            >
+              💡
+            </button>
+            <button onClick={() => setScreen('SETTINGS')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
+        </div>
       </div>
 
       <div className="flex-1 relative flex flex-col pt-16">
+        {/* Opponent Avatars */}
         <Avatar 
           player={gameState.players[2]} 
-          pos="top-2 left-1/2 -translate-x-1/2" 
+          pos="top-4 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 2 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 2}
         />
         <Avatar 
           player={gameState.players[3]} 
-          pos="top-[45%] left-2" 
+          pos="top-[35%] left-2" 
           active={gameState.turnIndex === 3 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 3}
         />
         <Avatar 
           player={gameState.players[1]} 
-          pos="top-[45%] right-2" 
+          pos="top-[35%] right-2" 
           active={gameState.turnIndex === 1 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 1}
         />
-        <Avatar 
-          player={gameState.players[0]} 
-          pos="bottom-0 left-1/2 -translate-x-1/2" 
-          active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
-          isWinner={clearingTrick?.winnerId === 0}
-        />
-
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[22rem] h-[22rem] flex items-center justify-center z-20 pointer-events-none">
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03]">
-              <span className="text-[20rem] text-white">♥</span>
+        
+        {/* Trick Area */}
+        <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[20rem] h-[20rem] flex items-center justify-center z-20 pointer-events-none">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.02]">
+              <span className="text-[18rem] text-white">♥</span>
           </div>
 
           {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
-             const spread = 55; 
+             const spread = 50; 
              const offsets = [
                { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },
                { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },
@@ -664,13 +643,14 @@ export default function App() {
           })}
         </div>
 
+        {/* Passing Stage */}
         {gameState.phase === 'PASSING' && (
-          <div className="absolute top-[35%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
+          <div className="absolute top-[30%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
                 {[0,1,2].map(i => (
-                    <div key={i} className={`w-[4.5rem] h-24 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}>
-                       <div className="text-white/5 text-5xl font-black">?</div>
+                    <div key={i} className={`w-[4rem] h-20 rounded-2xl staged-slot flex items-center justify-center shadow-2xl relative transition-all duration-300`}>
+                       <div className="text-white/5 text-4xl font-black">?</div>
                     </div>
                 ))}
              </div>
@@ -679,34 +659,55 @@ export default function App() {
               disabled={gameState.passingCards.length < 3}
               className={`mt-6 px-10 py-3 rounded-2xl font-black text-xl shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all duration-300 ${gameState.passingCards.length === 3 ? 'bg-blue-600 border-b-4 border-blue-800 scale-100 active:scale-95' : 'bg-gray-800/80 opacity-40 scale-90 grayscale'}`}
             >
-              Pass Cards
+              Confirm Pass
             </button>
           </div>
         )}
 
-        <div className="absolute top-[22%] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
+        <div className="absolute top-[20%] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
            {message && (
-             <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-xs font-black uppercase shadow-2xl border-2 border-white/20 animate-fan leading-tight">
+             <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[10px] font-black uppercase shadow-2xl border-2 border-white/20 animate-fan leading-tight">
                 {message}
              </div>
            )}
         </div>
       </div>
 
-      <div className="relative h-48 w-full flex justify-center items-end pb-[calc(1rem+var(--safe-bottom))] z-40 bg-gradient-to-t from-black/30 to-transparent">
+      {/* Human Avatar Integration - Adjusted bottom offset to prevent card overlap */}
+      <Avatar 
+        player={gameState.players[0]} 
+        pos="bottom-56 left-1/2 -translate-x-1/2" 
+        active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
+        isWinner={clearingTrick?.winnerId === 0}
+      />
+
+      {/* Repositioned Hand Area at the very bottom */}
+      <div className="relative h-48 w-full flex justify-center items-end pb-[calc(1.5rem+var(--safe-bottom))] z-40 bg-gradient-to-t from-black/40 to-transparent">
         <div className="relative h-full w-full overflow-visible">
            {gameState.players[0].hand.map((card, idx, arr) => {
              if (!card) return null;
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
              
-             // Asymmetrical Fan logic: Left anchored, Right bleed
-             const leftMargin = 16;
-             const tx = isSel ? (pIdx * 90) + 40 : (idx * handSpacing) + leftMargin;
-             const ty = isSel ? -285 : (idx * 0.45); 
+             // Perfect alignment calculation for Passing phase
+             // Slot width is 4rem (64px), gap-4 is 1rem (16px)
+             // Center slot is at screen center. Left/Right are at +/- 80px from center.
+             const cardWidthScaled = 99.2 * 0.6; // lg card width * passing scale
+             const screenCenter = window.innerWidth / 2;
+             const slotOffset = (pIdx - 1) * 80; // pIdx 0 -> -80, 1 -> 0, 2 -> 80
              
-             const rot = isSel ? 0 : (idx - (arr.length/2)) * 0.75;
-             const scale = isSel ? 0.66 : 1;
+             // tx calculation for passing: center the card exactly in its slot
+             const tx = isSel 
+                ? screenCenter + slotOffset - (cardWidthScaled / 2) 
+                : (idx * handSpacing) + 16;
+                
+             // ty calculation for passing: move up to top-30% area
+             // Current bottom area is h-48 (192px). Slots are at top-30%.
+             // ty of -245 fits well with the bottom-48 parent and top-30% slots on average mobile heights
+             const ty = isSel ? -245 : (idx * 0.4); 
+             
+             const rot = isSel ? 0 : (idx - (arr.length/2)) * 0.7;
+             const scale = isSel ? 0.6 : 1;
              const isLegal = legalCardIds ? legalCardIds.has(card.id) : true;
              const showInactive = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isLegal;
              const isDragging = dragInfo?.id === card.id;
@@ -723,29 +724,21 @@ export default function App() {
                   onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none pointer-events-auto' : ''}`}
                   style={{ 
-                    transform: `translateX(${tx}px) translateY(${ty + dragOffset}px) rotate(${isDragging ? 0 : rot}deg) scale(${isDragging ? (willPlay ? 1.15 : 1) : scale})`,
+                    transform: `translate3d(${tx}px, ${ty + dragOffset}px, 0) rotate(${isDragging ? 0 : rot}deg) scale(${isDragging ? (willPlay ? 1.15 : 1) : scale})`,
                     zIndex: isDragging ? 500 : (isSel ? 300 : 100 + idx),
-                    animationDelay: `${idx * 0.03}s`
+                    animationDelay: `${idx * 0.01}s`
                   }}
                 >
                   <CardView card={card} size="lg" inactive={showInactive} highlighted={willPlay} hint={isHint} />
                   {willPlay && (
                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-yellow-400 text-black font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-tighter whitespace-nowrap animate-bounce shadow-lg">
-                      Release to Play
+                      Play Now
                     </div>
                   )}
                 </div>
              );
            })}
         </div>
-      </div>
-
-      <div className="flex justify-around items-center h-20 bg-black/95 backdrop-blur-2xl border-t border-white/5 pb-[var(--safe-bottom)] z-50">
-        <NavItem icon="🃏" label="Games" onClick={() => setScreen('HOME')} />
-        <NavItem icon="ℹ" label="Info" />
-        <NavItem icon="🎴" label="Play" active={gameState.phase === 'PLAYING'} />
-        <NavItem icon="💡" label="Hint" onClick={handleHint} disabled={gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING'} />
-        <NavItem icon="🛡️" label="Tiers" />
       </div>
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
@@ -779,7 +772,7 @@ export default function App() {
   );
 }
 
-function SettingToggle({ label, desc, active, onClick }: { label: string, desc: string, active: boolean, onClick: () => void }) {
+const SettingToggle = memo(({ label, desc, active, onClick }: { label: string, desc: string, active: boolean, onClick: () => void }) => {
   return (
     <div onClick={onClick} className="w-full flex justify-between items-center bg-white/5 p-5 rounded-[2rem] border border-white/10 shadow-inner cursor-pointer active:scale-95 transition-all">
        <div className="flex flex-col items-start text-left pr-4">
@@ -791,4 +784,4 @@ function SettingToggle({ label, desc, active, onClick }: { label: string, desc: 
        </div>
     </div>
   );
-}
+});
