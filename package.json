@@ -1,6 +1,7 @@
 {
   "name": "hearts-pro-mobile",
   "version": "1.0.0",
+  "type": "module",
   "description": "Professional Hearts Card Game",
   "main": "index.tsx",
   "scripts": {
@@ -18,6 +19,7 @@
     "@capacitor/android": "^6.0.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
     "@capacitor/cli": "^6.0.0",
     "typescript": "^5.0.0",
     "vite": "^5.0.0"
