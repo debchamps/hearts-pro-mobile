@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameState, Player, Card, GamePhase, Suit, ScreenState, GameSettings } from './types';
 import { createDeck, shuffle, SUIT_SYMBOLS, SUIT_COLORS } from './constants';
 import { getBestMove } from './services/geminiService';
@@ -26,16 +26,25 @@ const SOUNDS = {
 };
 
 const playSound = (url: string, volume = 0.4) => {
-  const audio = new Audio(url);
-  audio.volume = volume;
-  audio.play().catch(() => {});
+  try {
+    const audio = new Audio(url);
+    audio.volume = volume;
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(error => {
+        console.warn("Playback failed. User must interact first.", error);
+      });
+    }
+  } catch (e) {
+    console.error("Audio system error", e);
+  }
 };
 
 function Overlay({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) {
   return (
-    <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-10 text-center animate-play">
-       <h2 className="text-7xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl">{title}</h2>
-       <p className="text-white/30 text-[11px] font-black uppercase tracking-[0.5em] mb-12">{subtitle}</p>
+    <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-6 text-center animate-play">
+       <h2 className="text-5xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl">{title}</h2>
+       <p className="text-white/30 text-[9px] font-black uppercase tracking-[0.5em] mb-8">{subtitle}</p>
        <div className={`w-full ${fullWidth ? 'max-w-xl' : 'max-w-sm'}`}>{children}</div>
     </div>
   );
@@ -320,7 +329,7 @@ export default function App() {
               const finalPlayers = newPlayers.map(p => {
                  let added = p.currentRoundScore || 0;
                  if (moonShooterId !== -1) added = (p.id === moonShooterId) ? 0 : 26;
-                 return { ...p, score: (p.score || 0) + added, currentRoundScore: 0 };
+                 return { ...p, score: (p.score || 0) + added, currentRoundScore: p.currentRoundScore };
               });
               const anyGameOver = finalPlayers.some(p => p.score >= TARGET_SCORE);
               return { 
@@ -363,9 +372,9 @@ export default function App() {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
     const leftMargin = 16;
-    const cardWidth = 86.4; 
-    const targetRightEdge = window.innerWidth + (cardWidth / 2);
-    const availableSpan = targetRightEdge - leftMargin - cardWidth;
+    const cardWidthLg = 86.4; 
+    const targetRightEdge = window.innerWidth + (cardWidthLg / 2);
+    const availableSpan = targetRightEdge - leftMargin - cardWidthLg;
     const spacing = availableSpan / (count - 1);
     return Math.max(16, Math.min(60, spacing));
   }, [gameState.players[0].hand.length]);
@@ -381,23 +390,16 @@ export default function App() {
         if (!card) return;
         let isLegal = true;
         if (!gameState.leadSuit) {
-            if (isFirstTrick) {
-                isLegal = card.id === '2-CLUBS';
-            } else {
-                if (card.suit === 'HEARTS' && !gameState.heartsBroken) {
-                    const onlyHearts = hand.every(c => !c || c.suit === 'HEARTS');
-                    isLegal = onlyHearts;
-                }
+            if (isFirstTrick) isLegal = card.id === '2-CLUBS';
+            else if (card.suit === 'HEARTS' && !gameState.heartsBroken) {
+                isLegal = hand.every(c => !c || c.suit === 'HEARTS');
             }
         } else {
-            if (hasLeadSuit) {
-                isLegal = card.suit === gameState.leadSuit;
-            } else {
-                if (isFirstTrick) {
-                    const isPointCard = card.suit === 'HEARTS' || card.id === 'Q-SPADES';
-                    const onlyPoints = hand.every(c => !c || c.suit === 'HEARTS' || c.id === 'Q-SPADES');
-                    if (isPointCard && !onlyPoints) isLegal = false;
-                }
+            if (hasLeadSuit) isLegal = card.suit === gameState.leadSuit;
+            else if (isFirstTrick) {
+                const isPointCard = card.suit === 'HEARTS' || card.id === 'Q-SPADES';
+                const onlyPoints = hand.every(c => !c || c.suit === 'HEARTS' || c.id === 'Q-SPADES');
+                if (isPointCard && !onlyPoints) isLegal = false;
             }
         }
         if (isLegal) set.add(card.id);
@@ -407,7 +409,6 @@ export default function App() {
 
   const onDragStart = (e: React.TouchEvent | React.MouseEvent, cardId: string) => {
     if (dragInfo || isProcessing) return; 
-    e.stopPropagation(); 
     const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
     setDragInfo({ id: cardId, startY: y, currentY: y });
   };
@@ -424,14 +425,12 @@ export default function App() {
         return;
     }
     const deltaY = dragInfo.startY - dragInfo.currentY;
-    if (deltaY > 10) {
-      if (deltaY >= DRAG_THRESHOLD) {
-         if (gameState.phase === 'PASSING') togglePassingCard(card.id);
-         else handleHumanPlay(card);
-      }
-    } else {
-      if (gameState.phase === 'PASSING') togglePassingCard(card.id);
-      else handleHumanPlay(card);
+    if (deltaY >= DRAG_THRESHOLD) {
+       if (gameState.phase === 'PASSING') togglePassingCard(card.id);
+       else handleHumanPlay(card);
+    } else if (deltaY < 5) { // It's a click
+       if (gameState.phase === 'PASSING') togglePassingCard(card.id);
+       else handleHumanPlay(card);
     }
     setDragInfo(null);
   };
@@ -442,9 +441,13 @@ export default function App() {
         <div className="text-9xl mb-4 drop-shadow-2xl animate-bounce">♥️</div>
         <h1 className="text-8xl font-black text-yellow-500 italic mb-2 tracking-tighter drop-shadow-lg text-center leading-[0.85]">HEARTS</h1>
         <p className="text-white/40 text-[11px] tracking-[0.5em] font-bold mb-16 uppercase">Professional Offline Edition</p>
-        <div className="flex flex-col gap-4 w-full max-w-xs">
+        <div className="flex flex-col gap-4 w-full max-w-xs px-4">
           <button 
-            onClick={() => { setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'})); setScreen('GAME'); }}
+            onClick={() => { 
+                if (soundEnabled) playSound(SOUNDS.PLAY, 0.4); 
+                setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'})); 
+                setScreen('GAME'); 
+            }}
             className="w-full py-6 bg-green-600 rounded-[2.5rem] text-3xl font-black shadow-2xl active:scale-95 transition-transform border-b-8 border-green-800"
           >
             START GAME
@@ -515,59 +518,51 @@ export default function App() {
         <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg">📊</div>
       </div>
 
-      <div className="flex-1 relative flex flex-col pt-16">
+      <div className="flex-1 relative flex flex-col pt-4 overflow-hidden">
         <Avatar 
           player={gameState.players[2]} 
-          pos="top-16 left-1/2 -translate-x-1/2" 
+          pos="top-6 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 2 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 2}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 2}
         />
         <Avatar 
           player={gameState.players[3]} 
-          pos="top-[45%] left-1" 
+          pos="top-[42%] left-2" 
           active={gameState.turnIndex === 3 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 3}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 3}
         />
         <Avatar 
           player={gameState.players[1]} 
-          pos="top-[45%] right-1" 
+          pos="top-[42%] right-2" 
           active={gameState.turnIndex === 1 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 1}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 1}
         />
+        
+        {/* YOU (P0) - Positioned just above the cards hand */}
         <Avatar 
           player={gameState.players[0]} 
-          pos="bottom-0 left-1/2 -translate-x-1/2" 
+          pos="bottom-[13.5rem] left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 0}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 0}
         />
 
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[22rem] h-[22rem] flex items-center justify-center z-20">
+        <div className="absolute top-[38%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[22rem] h-[22rem] flex items-center justify-center z-20 pointer-events-none">
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03]">
               <span className="text-[20rem] text-white">♥</span>
           </div>
 
-          {gameState.phase === 'PLAYING' && gameState.turnIndex !== -1 && !clearingTrick && (
-            <div className="absolute inset-0 flex items-center justify-center transition-all duration-700 pointer-events-none z-0" 
-                 style={{ transform: `rotate(${(gameState.turnIndex - 2) * -90}deg)` }}>
-              <div className="relative h-full w-full flex items-center justify-center">
-                  <div className="absolute top-12 text-yellow-400 text-5xl animate-pulse drop-shadow-[0_0_20px_rgba(250,204,21,1)]">
-                      ▲
-                  </div>
-              </div>
-            </div>
-          )}
-
           {(gameState.phase !== 'PASSING' || gameState.currentTrick.length > 0) && gameState.currentTrick.map((t, playIdx) => {
-             const spread = 44; 
+             const spreadX = 55; 
+             const spreadY = 85;
              const offsets = [
-               { x: 0, y: spread, start: 'translateY(400px)', rot: '-4deg' },
-               { x: spread, y: 0, start: 'translateX(300px)', rot: '12deg' },
-               { x: 0, y: -spread, start: 'translateY(-400px)', rot: '6deg' },
-               { x: -spread, y: 0, start: 'translateX(-300px)', rot: '-14deg' }
+               { x: 0, y: spreadY, start: 'translateY(400px)', rot: '-4deg' },
+               { x: spreadX, y: 0, start: 'translateX(300px)', rot: '12deg' },
+               { x: 0, y: -spreadY, start: 'translateY(-400px)', rot: '6deg' },
+               { x: -spreadX, y: 0, start: 'translateX(-300px)', rot: '-14deg' }
              ];
              const off = offsets[t.playerId] || { x:0, y:0, start:'scale(0)', rot:'0deg' };
              const winPositions = [
@@ -594,7 +589,7 @@ export default function App() {
         </div>
 
         {gameState.phase === 'PASSING' && !isPassFinalized && (
-          <div className="absolute top-[35%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
+          <div className="absolute top-[30%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
                 {[0,1,2].map(i => (
@@ -613,7 +608,7 @@ export default function App() {
           </div>
         )}
 
-        <div className="absolute top-[22%] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
+        <div className="absolute top-[18%] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
            {message && (
              <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-xs font-black uppercase shadow-2xl border-2 border-white/20 animate-fan leading-tight">
                 {message}
@@ -622,17 +617,20 @@ export default function App() {
         </div>
       </div>
 
-      <div className="relative h-48 w-full flex justify-center items-end pb-[calc(1rem+var(--safe-bottom))] z-40 bg-gradient-to-t from-black/30 to-transparent">
-        <div className="relative h-full w-full overflow-visible">
+      <div className="fixed bottom-24 w-full h-1 z-[60] flex justify-center items-end pointer-events-none">
+        <div className="relative h-full w-full overflow-visible pointer-events-none">
            {gameState.players[0].hand.map((card, idx, arr) => {
              if (!card) return null;
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
-             const leftMargin = 16;
-             const slotCenter = window.innerWidth / 2 - 43.2; 
              
-             const tx = isSel ? (slotCenter + (pIdx - 1) * 76) : (idx * handSpacing) + leftMargin;
-             const ty = isSel ? -285 : (idx * 0.5); 
+             const slotSpacing = 73.6; 
+             const centerX = window.innerWidth / 2;
+             const scaledCardWidth = 86.4 * 0.66; 
+             
+             const tx = isSel ? (centerX + (pIdx - 1) * slotSpacing - (scaledCardWidth / 2)) : (idx * handSpacing) + 16;
+             const h = window.innerHeight;
+             const ty = isSel ? (0.3 * h + 31) - (h - 96) : (idx * 0.4); 
              
              const rot = isSel ? 0 : (idx - (arr.length/2)) * 0.8;
              const scale = isSel ? 0.66 : 1;
@@ -651,7 +649,7 @@ export default function App() {
                   onTouchStart={(e) => onDragStart(e, card.id)}
                   onMouseUp={() => onDragEnd(card)}
                   onTouchEnd={() => onDragEnd(card)}
-                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none pointer-events-auto' : ''}`}
+                  className={`absolute card-fan-item animate-deal cursor-grab active:cursor-grabbing pointer-events-auto ${showInactive ? 'grayscale brightness-50 contrast-75 scale-[0.85] translate-y-6 shadow-none' : ''} ${isDragging ? 'z-[500] transition-none' : ''}`}
                   style={{ 
                     transform: `translateX(${tx}px) translateY(${ty + dragOffset}px) rotate(${isDragging ? 0 : rot}deg) scale(${isDragging ? (willPlay ? 1.15 : 1) : scale})`,
                     zIndex: isDragging ? 500 : (isSel ? 300 : 100 + idx),
@@ -670,38 +668,45 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex justify-around items-center h-20 bg-black/95 backdrop-blur-2xl border-t border-white/5 pb-[var(--safe-bottom)] z-50">
+      <div className="fixed bottom-0 left-0 right-0 h-16 bg-black/95 backdrop-blur-2xl border-t border-white/5 pb-[var(--safe-bottom)] z-50 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] flex justify-around items-center">
         <NavItem icon="🃏" label="Games" onClick={() => setScreen('MENU')} />
-        <NavItem icon="ℹ&nbsp;" label="Info" />
+        <NavItem icon="ℹ" label="Info" />
         <NavItem icon="🎴" label="Play" active={gameState.phase === 'PLAYING'} />
         <NavItem icon="💡" label="Hint" onClick={handleHint} disabled={gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING'} />
         <NavItem icon="🛡️" label="Tiers" />
       </div>
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
-        <Overlay title={gameState.phase === 'GAME_OVER' ? "GAME OVER" : "ROUND OVER"} subtitle={gameState.phase === 'GAME_OVER' ? "Final Standings" : "Round Standings"}>
-            <div className="w-full space-y-3 mb-10">
-               {gameState.players.map(p => (
-                 <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-3xl border border-white/10 shadow-inner">
-                    <div className="flex items-center gap-4">
-                       <span className="text-4xl">{p.avatar}</span>
-                       <div className="flex flex-col items-start text-left">
-                          <span className={`font-black text-sm uppercase tracking-tight ${p.id === 0 ? 'text-yellow-400' : 'text-white'}`}>{p.name}</span>
-                          <span className="text-[10px] text-white/30 font-bold tracking-[0.2em]">TOTAL: {p.score || 0}</span>
+        <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND RECAP"} subtitle={gameState.phase === 'GAME_OVER' ? "Game Finished" : `Round ${gameState.roundNumber} Complete`}>
+            <div className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-[2rem] p-5 w-full mb-8 shadow-2xl overflow-hidden">
+               <div className="grid grid-cols-4 gap-2 mb-4 text-[8px] font-black uppercase tracking-[0.2em] text-white/30 border-b border-white/5 pb-2">
+                 <div className="col-span-2 text-left pl-2">Player</div>
+                 <div>Round</div>
+                 <div>Total</div>
+               </div>
+               <div className="space-y-1">
+                  {gameState.players.map(p => (
+                    <div key={p.id} className={`grid grid-cols-4 gap-2 items-center py-2 rounded-xl transition-colors ${p.id === 0 ? 'bg-white/5' : ''}`}>
+                       <div className="col-span-2 flex items-center gap-2 pl-2 overflow-hidden">
+                          <span className="text-xl">{p.avatar}</span>
+                          <span className={`text-[10px] font-black uppercase truncate tracking-tight ${p.id === 0 ? 'text-yellow-400' : 'text-white/70'}`}>{p.name}</span>
                        </div>
+                       <div className="text-xs font-black text-yellow-500 italic">+{p.currentRoundScore || 0}</div>
+                       <div className="text-xs font-bold text-white/90">{p.score + (p.currentRoundScore || 0)}</div>
                     </div>
-                    <div className="text-right"><div className="text-3xl font-black italic text-yellow-500">+{p.currentRoundScore || 0}</div></div>
-                 </div>
-               ))}
+                  ))}
+               </div>
             </div>
+
             <button 
               onClick={() => {
+                if (soundEnabled) playSound(SOUNDS.PLAY, 0.4);
                 if (gameState.phase === 'GAME_OVER') setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'}));
                 else setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1}));
               }} 
-              className="w-full py-6 bg-green-600 rounded-[2.5rem] font-black text-2xl uppercase border-b-8 border-green-800 active:translate-y-2 transition-all shadow-xl"
+              className="w-full py-5 bg-green-600 rounded-[2rem] font-black text-xl uppercase border-b-4 border-green-800 active:translate-y-1 transition-all shadow-xl"
             >
-              {gameState.phase === 'GAME_OVER' ? "RESTART GAME" : "NEXT ROUND"}
+              {gameState.phase === 'GAME_OVER' ? "NEW TOURNAMENT" : "DEAL NEXT ROUND"}
             </button>
         </Overlay>
       )}
@@ -727,10 +732,12 @@ function Avatar({ player, pos, active, isWinner = false, isLeading = false }: { 
   if (!player) return null;
   return (
     <div className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'opacity-100 scale-110' : 'opacity-60 scale-95'} ${isWinner ? 'scale-125' : ''}`}>
-      {isLeading && <div className="absolute -bottom-10 bg-white/20 text-white px-2 py-0.5 rounded-md text-[7px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-md shadow-lg z-20">Lead</div>}
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-3xl shadow-[0_10px_30px_rgba(0,0,0,0.7)] border transition-all duration-500 ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : 'bg-black/70 border-white/20'} ${active ? 'border-yellow-500 ring-2 ring-yellow-500/30' : ''}`}>{player.avatar}</div>
+      {isLeading && <div className="absolute -bottom-8 bg-white/20 text-white px-2 py-0.5 rounded-md text-[6px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-md shadow-lg z-20">Lead</div>}
+      <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-3xl shadow-[0_10px_30px_rgba(0,0,0,0.7)] border transition-all duration-500 ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : 'bg-black/70 border-white/20'} ${active ? 'border-yellow-500 ring-2 ring-yellow-500/30' : ''}`}>{player.avatar}</div>
       <div className="flex flex-col items-center mt-1">
-          <div className="text-xl font-black italic drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-white leading-none">{player.score + (player.currentRoundScore || 0)}</div>
+          <div className="text-lg font-black italic drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-white leading-none">
+            {player.score + (player.currentRoundScore || 0)}
+          </div>
       </div>
     </div>
   );
@@ -738,10 +745,10 @@ function Avatar({ player, pos, active, isWinner = false, isLeading = false }: { 
 
 function NavItem({ icon, label, active = false, onClick, disabled = false }: { icon: string, label: string, active?: boolean, onClick?: () => void, disabled?: boolean }) {
   return (
-    <button onClick={onClick} disabled={disabled} className={`flex flex-col items-center gap-1.5 transition-all duration-300 ${active ? 'text-yellow-500 scale-110 drop-shadow-[0_0_10px_rgba(234,179,8,0.5)]' : 'text-white/20'} ${disabled ? 'opacity-20 pointer-events-none' : 'active:scale-90'}`}>
-      <span className="text-2xl">{icon}</span>
-      <span className="text-[9px] font-black uppercase tracking-widest">{label}</span>
-      {active && <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 mt-1 shadow-[0_0_10px_yellow]" />}
+    <button onClick={onClick} disabled={disabled} className={`flex flex-col items-center gap-1 transition-all duration-300 ${active ? 'text-yellow-500 scale-110' : 'text-white/20'} ${disabled ? 'opacity-20 pointer-events-none' : 'active:scale-90'}`}>
+      <span className="text-xl">{icon}</span>
+      <span className="text-[8px] font-black uppercase tracking-widest">{label}</span>
+      {active && <div className="w-1 h-1 rounded-full bg-yellow-500 mt-1 shadow-[0_0_8px_yellow]" />}
     </button>
   );
 }
@@ -749,7 +756,6 @@ function NavItem({ icon, label, active = false, onClick, disabled = false }: { i
 function CardView({ card, size = 'md', inactive = false, highlighted = false, hint = false, isNew = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean, isNew?: boolean }) {
   if (!card) return null;
   
-  // Refined padding and sizes to ensure numbers/symbols are aligned correctly
   const dims = size === 'sm' ? 'w-[3.6rem] h-[4.8rem] p-[0.35rem]' : size === 'md' ? 'w-[4.5rem] h-[6rem] p-[0.45rem]' : 'w-[5.4rem] h-[7.2rem] p-[0.6rem]';
   const rankStyle = size === 'sm' ? 'text-sm' : size === 'md' ? 'text-lg' : 'text-xl';
   const cornerSymStyle = size === 'sm' ? 'text-[8px]' : size === 'md' ? 'text-[10px]' : 'text-xs';
