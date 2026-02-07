@@ -369,7 +369,7 @@ export default function App() {
     if (count <= 1) return 0;
     const leftMargin = 16;
     const cardWidthLg = 86.4; 
-    const windowW = Math.min(window.innerWidth, 768); // Cap for tablets
+    const windowW = Math.min(window.innerWidth, 768); 
     const targetRightEdge = windowW + (cardWidthLg / 2);
     const availableSpan = targetRightEdge - leftMargin - cardWidthLg;
     const spacing = availableSpan / (count - 1);
@@ -515,13 +515,12 @@ export default function App() {
         <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg">📊</div>
       </div>
 
-      {/* Main Game Board - Constrained for wider devices */}
-      <div className="flex-1 relative mx-auto w-full max-w-screen-md flex flex-col pt-4 overflow-hidden">
+      <div className="flex-1 relative mx-auto w-full max-w-screen-md flex flex-col pt-2 overflow-hidden">
         
-        {/* Avatars - Anchored relative to screen height percentages */}
+        {/* Avatars Positioning Optimized */}
         <Avatar 
           player={gameState.players[2]} 
-          pos="top-[2vh] left-1/2 -translate-x-1/2" 
+          pos="top-2 left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 2 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 2}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 2}
@@ -542,14 +541,14 @@ export default function App() {
         />
         <Avatar 
           player={gameState.players[0]} 
-          pos="bottom-[21vh] left-1/2 -translate-x-1/2" 
+          pos="bottom-[12.5rem] left-1/2 -translate-x-1/2" 
           active={gameState.turnIndex === 0 && gameState.phase === 'PLAYING'} 
           isWinner={clearingTrick?.winnerId === 0}
           isLeading={gameState.currentTrick.length > 0 && gameState.currentTrick[0]?.playerId === 0}
         />
 
-        {/* Central Play Area */}
-        <div className="absolute top-[38vh] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(80vw,22rem)] aspect-square flex items-center justify-center z-20 pointer-events-none">
+        {/* Central Play Area - Anchor higher to prevent overlaps with cards */}
+        <div className="absolute top-[36vh] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(80vw,22rem)] aspect-square flex items-center justify-center z-20 pointer-events-none">
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03]">
               <span className="text-[min(60vw,20rem)] text-white">♥</span>
           </div>
@@ -587,9 +586,9 @@ export default function App() {
           })}
         </div>
 
-        {/* Passing slots - Synchronized at top-[32%] */}
+        {/* Passing slots - Adjusted higher to top-[26%] */}
         {gameState.phase === 'PASSING' && !isPassFinalized && (
-          <div className="absolute top-[32%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
+          <div className="absolute top-[26%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full z-40 px-6">
              <div className="text-[11px] font-black uppercase tracking-[0.4em] text-white/30 mb-5">Selected to Pass</div>
              <div className="flex gap-4">
                 {[0,1,2].map(i => (
@@ -608,8 +607,8 @@ export default function App() {
           </div>
         )}
 
-        {/* HUD Messages */}
-        <div className="absolute top-[18vh] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
+        {/* HUD Messages - Moved to top-[12vh] to prevent overlap with Snake */}
+        <div className="absolute top-[12vh] w-full flex flex-col items-center pointer-events-none z-50 px-10 text-center">
            {message && (
              <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-xs font-black uppercase shadow-2xl border-2 border-white/20 animate-fan leading-tight">
                 {message}
@@ -618,29 +617,24 @@ export default function App() {
         </div>
       </div>
 
-      {/* Hand Container - Fixed distance from bottom */}
-      <div className="fixed bottom-24 w-full h-1 z-[60] flex justify-center items-end pointer-events-none">
+      {/* Hand Container - Lowered to bottom-[4.5rem] */}
+      <div className="fixed bottom-[4.5rem] w-full h-1 z-[60] flex justify-center items-end pointer-events-none">
         <div className="relative mx-auto w-full max-w-screen-md h-full overflow-visible pointer-events-none">
            {gameState.players[0].hand.map((card, idx, arr) => {
              if (!card) return null;
              const isSel = gameState.passingCards.includes(card.id);
              const pIdx = gameState.passingCards.indexOf(card.id);
              
-             // Dynamic Responsive Passing Overlay Logic
              const windowW = Math.min(window.innerWidth, 768);
              const centerX = windowW / 2;
-             const slotSpacing = 73.6; // 3.6rem (57.6) + gap-4 (16)
+             const slotSpacing = 73.6; 
              const scaledCardWidth = 86.4 * 0.66;
              
-             // X calculation caps at centered container
              const tx = isSel ? (centerX + (pIdx - 1) * slotSpacing - (scaledCardWidth / 2)) : (idx * handSpacing) + 16;
              
-             // Y Calculation: Maps bottom-24 to top-[32%] area precisely
              const h = window.innerHeight;
-             // 0.32 * h accounts for the slot top position.
-             // 31px is the offset for the passing header text/padding.
-             // (h - 96) is the offset from the bottom-24 fixed container.
-             const ty = isSel ? (0.32 * h + 31) - (h - 96) : (idx * 0.4); 
+             // Calculation adjusted for top-[26%] passing slots and bottom-[4.5rem] (72px) hand container
+             const ty = isSel ? (0.26 * h + 31) - (h - 72) : (idx * 0.4); 
              
              const rot = isSel ? 0 : (idx - (arr.length/2)) * 0.8;
              const scale = isSel ? 0.66 : 1;
