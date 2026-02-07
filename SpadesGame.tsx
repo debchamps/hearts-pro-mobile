@@ -42,6 +42,26 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
+  const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    setDragInfo({ id, startY: clientY, currentY: clientY });
+  };
+
+  const onDragMove = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!dragInfo) return;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    setDragInfo(prev => prev ? { ...prev, currentY: clientY } : null);
+  };
+
+  const onDragEnd = (card: Card) => {
+    if (!dragInfo) return;
+    const diff = dragInfo.startY - dragInfo.currentY;
+    if (diff > 60 || Math.abs(diff) < 10) {
+      handleHumanPlay(card);
+    }
+    setDragInfo(null);
+  };
+
   const startRound = useCallback(() => {
     const deck = shuffle(createDeck(gameState.settings));
     const players = gameState.players.map((p, i) => ({
@@ -53,7 +73,6 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       tricksWon: 0,
       bid: undefined
     }));
-
     setGameState(prev => ({
       ...prev,
       players,
@@ -95,7 +114,14 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   const handleBid = (bid: number) => {
     setGameState(prev => {
       const newPlayers = prev.players.map(p => p.id === 0 ? { ...p, bid } : p);
-      return { ...prev, players: newPlayers, turnIndex: 1 };
+      const allBid = newPlayers.every(p => p.bid !== undefined);
+      if (allBid) setMessage("");
+      return { 
+        ...prev, 
+        players: newPlayers, 
+        turnIndex: allBid ? (prev.dealerIndex + 1) % 4 : (prev.turnIndex + 1) % 4,
+        phase: allBid ? 'PLAYING' : 'BIDDING'
+      };
     });
   };
 
@@ -109,6 +135,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         setGameState(prev => {
           const newPlayers = prev.players.map(p => p.id === prev.turnIndex ? { ...p, bid } : p);
           const allBid = newPlayers.every(p => p.bid !== undefined);
+          if (allBid) setMessage("");
           return {
             ...prev,
             players: newPlayers,
@@ -146,7 +173,6 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         }
         setClearingTrick({ winnerId: winner.playerId });
         if (soundEnabled) playSound(SOUNDS.CLEAR, 0.4);
-
         setTimeout(() => {
           setGameState(prev => {
             const newPlayers = prev.players.map(p => p.id === winner.playerId ? { ...p, tricksWon: (p.tricksWon || 0) + 1 } : p);
@@ -183,20 +209,21 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
-    const containerWidth = Math.min(window.innerWidth, 550) - 32;
+    const containerWidth = Math.min(window.innerWidth, 550) - 80;
     const spacing = (containerWidth - 93) / (count - 1);
-    return Math.max(12, Math.min(45, spacing));
+    return Math.max(28, Math.min(45, spacing));
   }, [gameState.players[0].hand.length]);
 
-  const onDragStart = (e: any, cardId: string) => { setDragInfo({ id: cardId, startY: 'touches' in e ? e.touches[0].clientY : e.clientY, currentY: 'touches' in e ? e.touches[0].clientY : e.clientY }); };
-  const onDragMove = (e: any) => { if (dragInfo) setDragInfo({ ...dragInfo, currentY: 'touches' in e ? e.touches[0].clientY : e.clientY }); };
-  const onDragEnd = (card: Card) => { if (dragInfo && dragInfo.id === card.id) { if (dragInfo.startY - dragInfo.currentY >= 50) handleHumanPlay(card); else handleHumanPlay(card); } setDragInfo(null); };
-
-  const startX = (window.innerWidth - ((gameState.players[0].hand.length - 1) * handSpacing + 93)) / 2;
+  const startX = useMemo(() => {
+    const totalHandWidth = ((gameState.players[0].hand.length - 1) * handSpacing) + 93;
+    // Offset nudged to +12px for better centering while ensuring left side doesn't clip
+    return (window.innerWidth - totalHandWidth) / 2 + 12;
+  }, [gameState.players[0].hand.length, handSpacing]);
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
-      <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 h-16 shadow-2xl border-b border-white/5">
+      {/* HEADER: 10% */}
+      <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <button onClick={onExit} className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">🏠</button>
         <div className="flex items-center bg-black/60 rounded-lg overflow-hidden border border-white/10 h-10 w-48 shadow-lg">
           <div className="flex-1 bg-blue-700 h-full flex flex-col items-center justify-center leading-none">
@@ -212,33 +239,56 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <div className="w-8" />
       </div>
 
-      <div className="flex-1 relative">
-        <Avatar player={gameState.players[2]} pos="top-4 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-[30%] left-2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-[30%] right-2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
-        
-        {/* YOU Avatar positioned lower, sitting just on top of the cards area */}
-        <Avatar player={gameState.players[0]} pos="bottom-[145px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
+      {/* PLAY AREA: 70% */}
+      <div className="h-[70%] relative w-full">
+        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[235px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
+          <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
         )}
 
-        <div className="absolute top-[38%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
+        {/* Trick Area */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
-             const offsets = [{ x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }];
+             const offsets = [
+               { x: 0, y: spread, rot: '0deg' },    // You (P0)
+               { x: spread, y: 0, rot: '15deg' },   // Fish (P1)
+               { x: 0, y: -spread, rot: '-5deg' },  // Snake (P2)
+               { x: -spread, y: 0, rot: '-15deg' }  // Shrimp (P3)
+             ];
              const off = offsets[t.playerId];
-             const winDir = [{ x: 0, y: 400 }, { x: 300, y: 0 }, { x: 0, y: -400 }, { x: -300, y: 0 }][clearingTrick?.winnerId ?? 0];
+             const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
+             
+             const startPos = [
+                { x: 0, y: 350 },    // P0: Bottom
+                { x: 380, y: 0 },    // P1: Right
+                { x: 0, y: -350 },   // P2: Top
+                { x: -380, y: 0 }    // P3: Left
+             ][t.playerId];
+
              return (
-               <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} style={{ '--play-x': `${off.x}px`, '--play-y': `${off.y}px`, '--play-rot': off.rot, '--play-start': 'scale(0.5)', '--clear-x': `${winDir.x}px`, '--clear-y': `${winDir.y}px`, zIndex: 10 + idx } as any}>
+               <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} 
+                 style={{ 
+                   '--play-x': `${off.x}px`, 
+                   '--play-y': `${off.y}px`, 
+                   '--play-rot': off.rot, 
+                   '--start-x': `${startPos.x}px`,
+                   '--start-y': `${startPos.y}px`,
+                   '--clear-x': `${winDir.x}px`, 
+                   '--clear-y': `${winDir.y}px`, 
+                   zIndex: 10 + idx 
+                 } as any}>
                  <CardView card={t.card} size="md" />
                </div>
              );
           })}
         </div>
 
-        <div className="absolute top-[18%] w-full flex flex-col items-center z-50 px-10">
+        <div className="absolute top-[20%] w-full flex flex-col items-center z-50 px-10 text-center">
            {message && <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30">{message}</div>}
            {gameState.phase === 'BIDDING' && gameState.turnIndex === 0 && (
              <div className="mt-8 grid grid-cols-5 gap-3 bg-black/80 p-5 rounded-[2.5rem] border border-white/10 backdrop-blur-2xl shadow-2xl">
@@ -251,23 +301,24 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      {/* Hand area fixed to absolute bottom with enough height for visibility */}
-      <div className="relative h-[130px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
+      {/* HAND AREA: 20% - Subtle Arc Distribution */}
+      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
              const tx = (idx * handSpacing) + startX;
              const centerIdx = (arr.length - 1) / 2;
-             const distFromCenter = Math.abs(idx - centerIdx);
-             const rot = (idx - centerIdx) * 2; 
+             const diffFromCenter = idx - centerIdx;
+             
+             // Very subtle arc effect for better usability and visibility
+             const rot = diffFromCenter * 1.2; 
+             const ty = Math.pow(diffFromCenter, 2) * 0.45;
+             
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
-             
              let finalTx = tx;
-             // Fan upwards (negative Y) so side cards don't drop off screen
-             let finalTy = -distFromCenter * 1.5; 
+             let finalTy = ty; 
              let finalRot = rot;
              let finalZIndex = 100 + idx;
-
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging ? 'z-[500]' : ''}`}
