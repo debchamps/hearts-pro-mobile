@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Card Game Bazaar Mini </string>
-    <string name="title_activity_main">Card Game Bazaar Mini </string>
-    <string name="package_name">com.datgames.minicardgames</string>
-    <string name="custom_url_scheme">com.datgames.minicardgames</string>
-</resources>
