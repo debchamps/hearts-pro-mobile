@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GameState, Player, Card, GamePhase, Suit, ScreenState } from './types';
+import { GameState, Player, Card, GamePhase, Suit, ScreenState, GameSettings } from './types';
 import { createDeck, shuffle, SUIT_SYMBOLS, SUIT_COLORS } from './constants';
 import { getBestMove } from './services/geminiService';
+
+const DEFAULT_SETTINGS: GameSettings = {
+  shootTheMoon: true,
+  noPassing: false,
+  jackOfDiamonds: false,
+};
 
 const INITIAL_PLAYERS: Player[] = [
   { id: 0, name: 'YOU', avatar: '👤', hand: [], score: 0, currentRoundScore: 0, isHuman: true },
@@ -25,12 +31,12 @@ const playSound = (url: string, volume = 0.4) => {
   audio.play().catch(() => {});
 };
 
-function Overlay({ title, subtitle, children }: { title: string, subtitle: string, children?: React.ReactNode }) {
+function Overlay({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) {
   return (
     <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-10 text-center animate-play">
        <h2 className="text-7xl font-black text-yellow-500 italic mb-1 tracking-tighter drop-shadow-2xl">{title}</h2>
        <p className="text-white/30 text-[11px] font-black uppercase tracking-[0.5em] mb-12">{subtitle}</p>
-       <div className="w-full max-w-sm">{children}</div>
+       <div className={`w-full ${fullWidth ? 'max-w-xl' : 'max-w-sm'}`}>{children}</div>
     </div>
   );
 }
@@ -38,6 +44,12 @@ function Overlay({ title, subtitle, children }: { title: string, subtitle: strin
 export default function App() {
   const [screen, setScreen] = useState<ScreenState>('MENU');
   const [soundEnabled, setSoundEnabled] = useState(true);
+  
+  const [settings, setSettings] = useState<GameSettings>(() => {
+    const saved = localStorage.getItem('hearts_pro_settings');
+    return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+  });
+
   const [gameState, setGameState] = useState<GameState>({
     players: INITIAL_PLAYERS,
     dealerIndex: 0,
@@ -47,7 +59,8 @@ export default function App() {
     heartsBroken: false,
     phase: 'DEALING',
     roundNumber: 1,
-    passingCards: ["", "", ""]
+    passingCards: ["", "", ""],
+    settings: settings
   });
 
   const [message, setMessage] = useState("");
@@ -58,8 +71,13 @@ export default function App() {
   const [receivedCards, setReceivedCards] = useState<string[]>([]);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
+  useEffect(() => {
+    localStorage.setItem('hearts_pro_settings', JSON.stringify(settings));
+    setGameState(prev => ({ ...prev, settings }));
+  }, [settings]);
+
   const startRound = useCallback(() => {
-    const deck = shuffle(createDeck());
+    const deck = shuffle(createDeck(settings));
     const players = gameState.players.map((p, i) => ({
       ...p,
       hand: deck.slice(i * 13, (i + 1) * 13).sort((a, b) => {
@@ -71,7 +89,7 @@ export default function App() {
     }));
 
     const cycle = (gameState.roundNumber - 1) % 4;
-    const isPassingRound = cycle !== 3;
+    const isPassingRound = !settings.noPassing && cycle !== 3;
 
     setGameState(prev => {
       let turnIdx = -1;
@@ -95,12 +113,13 @@ export default function App() {
     setReceivedCards([]);
     setIsPassFinalized(false);
     if (!isPassingRound) {
-       setMessage("Round 4: No Pass. 2 of Clubs leads.");
+       const msg = settings.noPassing ? "No-Passing Game Mode" : "Round 4: No Pass. 2 of Clubs leads.";
+       setMessage(msg);
     } else {
        const dir = cycle === 0 ? "Left" : cycle === 1 ? "Right" : "Across";
        setMessage(`Pass 3 cards ${dir}`);
     }
-  }, [gameState.players, gameState.roundNumber]);
+  }, [gameState.players, gameState.roundNumber, settings]);
 
   useEffect(() => {
     if (gameState.phase === 'DEALING' && screen === 'GAME') {
@@ -189,14 +208,12 @@ export default function App() {
       if (p.hand.some(c => c && c.id === '2-CLUBS')) starter = i; 
     });
 
-    // Swap hands and clear passing selections immediately
     setGameState(prev => ({ 
       ...prev, 
       players: newPlayers, 
       passingCards: ["", "", ""] 
     }));
 
-    // Wait 2.5 seconds for the user to see received cards before starting
     setTimeout(() => {
       setGameState(prev => ({
         ...prev,
@@ -235,7 +252,7 @@ export default function App() {
     try {
       const humanPlayer = gameState.players[0];
       const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
-      const bestCardId = await getBestMove(humanPlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, humanPlayer.name);
+      const bestCardId = await getBestMove(humanPlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, humanPlayer.name, settings);
       setHintCardId(bestCardId);
       setTimeout(() => setHintCardId(null), 3000);
     } catch (e) {
@@ -260,7 +277,7 @@ export default function App() {
         setIsProcessing(true);
         try {
           const isFirstTrick = gameState.players.reduce((sum, p) => sum + (p.hand?.length || 0), 0) === 52;
-          const cardId = await getBestMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, activePlayer.name);
+          const cardId = await getBestMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.heartsBroken, isFirstTrick, activePlayer.name, settings);
           if (cardId) playCard(gameState.turnIndex, cardId);
         } catch (err) {
           console.error("AI Turn Error:", err);
@@ -270,7 +287,7 @@ export default function App() {
       };
       runAi();
     }
-  }, [gameState.turnIndex, gameState.phase, screen, isProcessing, clearingTrick, playCard, gameState.currentTrick.length]);
+  }, [gameState.turnIndex, gameState.phase, screen, isProcessing, clearingTrick, playCard, gameState.currentTrick.length, settings]);
 
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
@@ -294,7 +311,12 @@ export default function App() {
             
             if (newPlayers[0].hand.length === 0) {
               let moonShooterId = -1;
-              newPlayers.forEach(p => { if (p.currentRoundScore === 26) moonShooterId = p.id; });
+              if (settings.shootTheMoon) {
+                newPlayers.forEach(p => { 
+                  if (p.currentRoundScore === 26) moonShooterId = p.id; 
+                });
+              }
+
               const finalPlayers = newPlayers.map(p => {
                  let added = p.currentRoundScore || 0;
                  if (moonShooterId !== -1) added = (p.id === moonShooterId) ? 0 : 26;
@@ -316,7 +338,7 @@ export default function App() {
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [gameState.currentTrick, soundEnabled]);
+  }, [gameState.currentTrick, soundEnabled, settings.shootTheMoon]);
 
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick || gameState.currentTrick.length >= 4) return;
@@ -418,15 +440,56 @@ export default function App() {
     return (
       <div className="h-screen w-full flex flex-col items-center justify-center felt-bg overflow-hidden">
         <div className="text-9xl mb-4 drop-shadow-2xl animate-bounce">♥️</div>
-        <h1 className="text-8xl font-black text-yellow-500 italic mb-2 tracking-tighter drop-shadow-lg">HEARTS</h1>
+        <h1 className="text-8xl font-black text-yellow-500 italic mb-2 tracking-tighter drop-shadow-lg text-center leading-[0.85]">HEARTS</h1>
         <p className="text-white/40 text-[11px] tracking-[0.5em] font-bold mb-16 uppercase">Professional Offline Edition</p>
-        <button 
-          onClick={() => { setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'})); setScreen('GAME'); }}
-          className="px-20 py-7 bg-green-600 rounded-[2.5rem] text-3xl font-black shadow-2xl active:scale-95 transition-transform border-b-8 border-green-800"
-        >
-          START GAME
-        </button>
+        <div className="flex flex-col gap-4 w-full max-w-xs">
+          <button 
+            onClick={() => { setGameState(p => ({...p, players: INITIAL_PLAYERS.map(pl => ({...pl, score: 0})), roundNumber: 1, phase: 'DEALING'})); setScreen('GAME'); }}
+            className="w-full py-6 bg-green-600 rounded-[2.5rem] text-3xl font-black shadow-2xl active:scale-95 transition-transform border-b-8 border-green-800"
+          >
+            START GAME
+          </button>
+          <button 
+            onClick={() => setScreen('SETTINGS')}
+            className="w-full py-4 bg-black/40 rounded-[2rem] text-xl font-bold border border-white/10 active:scale-95 transition-transform"
+          >
+            SETTINGS
+          </button>
+        </div>
       </div>
+    );
+  }
+
+  if (screen === 'SETTINGS') {
+    return (
+      <Overlay title="SETTINGS" subtitle="Configure Rules" fullWidth>
+        <div className="space-y-4 mb-12">
+          <SettingToggle 
+            label="Shoot the Moon" 
+            desc="Collect all hearts + Q of Spades to get 0 pts and give others 26."
+            active={settings.shootTheMoon}
+            onClick={() => setSettings(s => ({ ...s, shootTheMoon: !s.shootTheMoon }))}
+          />
+          <SettingToggle 
+            label="No Passing Mode" 
+            desc="Skip the card passing phase for all rounds."
+            active={settings.noPassing}
+            onClick={() => setSettings(s => ({ ...s, noPassing: !s.noPassing }))}
+          />
+          <SettingToggle 
+            label="Jack of Diamonds" 
+            desc="Jack of Diamonds is worth -10 points."
+            active={settings.jackOfDiamonds}
+            onClick={() => setSettings(s => ({ ...s, jackOfDiamonds: !s.jackOfDiamonds }))}
+          />
+        </div>
+        <button 
+          onClick={() => setScreen('MENU')}
+          className="w-full py-6 bg-yellow-500 text-black rounded-[2.5rem] font-black text-2xl uppercase border-b-8 border-yellow-700 active:translate-y-2 transition-all shadow-xl"
+        >
+          BACK TO MENU
+        </button>
+      </Overlay>
     );
   }
 
@@ -440,7 +503,7 @@ export default function App() {
     >
       <div className="flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/60 pb-4 backdrop-blur-md border-b border-white/5 h-16 shadow-2xl">
         <div className="flex gap-2">
-            <button onClick={() => setScreen('MENU')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
+            <button onClick={() => setScreen('SETTINGS')} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">⚙️</button>
             <button onClick={() => setSoundEnabled(!soundEnabled)} className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-xl shadow-lg active:scale-90 transition-transform">
                 {soundEnabled ? '🔊' : '🔇'}
             </button>
@@ -608,7 +671,7 @@ export default function App() {
       </div>
 
       <div className="flex justify-around items-center h-20 bg-black/95 backdrop-blur-2xl border-t border-white/5 pb-[var(--safe-bottom)] z-50">
-        <NavItem icon="🃏" label="Games" />
+        <NavItem icon="🃏" label="Games" onClick={() => setScreen('MENU')} />
         <NavItem icon="ℹ&nbsp;" label="Info" />
         <NavItem icon="🎴" label="Play" active={gameState.phase === 'PLAYING'} />
         <NavItem icon="💡" label="Hint" onClick={handleHint} disabled={gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING'} />
@@ -646,6 +709,20 @@ export default function App() {
   );
 }
 
+function SettingToggle({ label, desc, active, onClick }: { label: string, desc: string, active: boolean, onClick: () => void }) {
+  return (
+    <div onClick={onClick} className="w-full flex justify-between items-center bg-white/5 p-5 rounded-[2rem] border border-white/10 shadow-inner cursor-pointer active:scale-95 transition-all">
+       <div className="flex flex-col items-start text-left pr-4">
+          <span className="font-black text-xl text-white uppercase tracking-tight">{label}</span>
+          <span className="text-[10px] text-white/40 font-bold">{desc}</span>
+       </div>
+       <div className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ${active ? 'bg-green-500' : 'bg-white/10'}`}>
+          <div className={`w-6 h-6 bg-white rounded-full shadow-lg transform transition-transform duration-300 ${active ? 'translate-x-6' : 'translate-x-0'}`} />
+       </div>
+    </div>
+  );
+}
+
 function Avatar({ player, pos, active, isWinner = false, isLeading = false }: { player: Player, pos: string, active: boolean, isWinner?: boolean, isLeading?: boolean }) {
   if (!player) return null;
   return (
@@ -671,7 +748,9 @@ function NavItem({ icon, label, active = false, onClick, disabled = false }: { i
 
 function CardView({ card, size = 'md', inactive = false, highlighted = false, hint = false, isNew = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean, isNew?: boolean }) {
   if (!card) return null;
-  const dims = size === 'sm' ? 'w-[3.6rem] h-[4.8rem] p-1' : size === 'md' ? 'w-[4.5rem] h-[6rem] p-1.2' : 'w-[5.4rem] h-[7.2rem] p-1.5';
+  
+  // Refined padding and sizes to ensure numbers/symbols are aligned correctly
+  const dims = size === 'sm' ? 'w-[3.6rem] h-[4.8rem] p-[0.35rem]' : size === 'md' ? 'w-[4.5rem] h-[6rem] p-[0.45rem]' : 'w-[5.4rem] h-[7.2rem] p-[0.6rem]';
   const rankStyle = size === 'sm' ? 'text-sm' : size === 'md' ? 'text-lg' : 'text-xl';
   const cornerSymStyle = size === 'sm' ? 'text-[8px]' : size === 'md' ? 'text-[10px]' : 'text-xs';
   const brSymStyle = size === 'sm' ? 'text-lg' : size === 'md' ? 'text-xl' : 'text-2xl';
@@ -684,7 +763,10 @@ function CardView({ card, size = 'md', inactive = false, highlighted = false, hi
 
   return (
     <div className={`${dims} bg-white rounded-xl card-shadow flex flex-col items-start justify-start ${inactive ? '' : 'border-b-[4px]'} border-gray-300 ${SUIT_COLORS[card.suit] || 'text-black'} relative overflow-hidden transition-all duration-300 ${showRing ? `ring-4 ${ringColor}` : ''} ${hint || isNew ? 'animate-pulse' : ''}`}>
-      <div className="flex flex-col items-start leading-none z-10"><div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div><div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div></div>
+      <div className="flex flex-col items-start leading-none z-10">
+        <div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div>
+        <div className={`${cornerSymStyle} mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
+      </div>
       <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.06] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>{SUIT_SYMBOLS[card.suit]}</div>
       <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>{SUIT_SYMBOLS[card.suit]}</div>
       {inactive && <div className="absolute inset-0 bg-black/10 backdrop-blur-[0.5px]" />}

@@ -1,4 +1,3 @@
-
 export type Suit = 'HEARTS' | 'DIAMONDS' | 'CLUBS' | 'SPADES';
 export type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
 
@@ -8,6 +7,12 @@ export interface Card {
   rank: Rank;
   value: number;
   points: number;
+}
+
+export interface GameSettings {
+  shootTheMoon: boolean;
+  noPassing: boolean;
+  jackOfDiamonds: boolean;
 }
 
 export interface Player {
@@ -26,7 +31,7 @@ export interface TrickCard {
 }
 
 export type GamePhase = 'DEALING' | 'PASSING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
-export type ScreenState = 'MENU' | 'GAME';
+export type ScreenState = 'MENU' | 'GAME' | 'SETTINGS';
 
 export interface GameState {
   players: Player[];
@@ -38,4 +43,5 @@ export interface GameState {
   phase: GamePhase;
   roundNumber: number;
   passingCards: string[]; // IDs of cards selected for passing
+  settings: GameSettings;
 }

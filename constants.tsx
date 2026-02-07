@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { Suit, Rank, Card } from './types';
+import { Suit, Rank, Card, GameSettings } from './types';
 
 export const SUITS: Suit[] = ['CLUBS', 'DIAMONDS', 'SPADES', 'HEARTS'];
 export const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -24,13 +23,14 @@ export const SUIT_SYMBOLS: Record<Suit, React.ReactNode> = {
   SPADES: <span className="text-2xl">♠</span>,
 };
 
-export const createDeck = (): Card[] => {
+export const createDeck = (settings: GameSettings): Card[] => {
   const deck: Card[] = [];
   SUITS.forEach(suit => {
     RANKS.forEach(rank => {
       let points = 0;
       if (suit === 'HEARTS') points = 1;
       if (suit === 'SPADES' && rank === 'Q') points = 13;
+      if (settings.jackOfDiamonds && suit === 'DIAMONDS' && rank === 'J') points = -10;
 
       deck.push({
         id: `${rank}-${suit}`,
