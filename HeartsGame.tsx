@@ -269,15 +269,15 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <Avatar player={gameState.players[3]} pos="top-[30%] left-2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[1]} pos="top-[30%] right-2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
         
-        {/* YOU Avatar positioned lower, sitting just on top of the cards */}
-        <Avatar player={gameState.players[0]} pos="bottom-[130px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
+        {/* YOU Avatar positioned lower, sitting just on top of the cards area */}
+        <Avatar player={gameState.players[0]} pos="bottom-[135px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[210px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20">Your Turn</div>
+          <div className="absolute bottom-[225px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
         )}
 
         {gameState.phase === 'PASSING' && (
-          <div className="absolute bottom-[210px] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
+          <div className="absolute bottom-[225px] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
             {[0, 1, 2].map(i => (
               <div key={i} className="staged-slot rounded-xl flex items-center justify-center" style={{ width: `${SLOT_WIDTH}px`, height: `${SLOT_HEIGHT}px` }}>
                 <span className="text-white/10 font-black text-4xl">?</span>
@@ -286,7 +286,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           </div>
         )}
 
-        <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
+        <div className="absolute top-[38%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
              const offsets = [{ x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }];
@@ -300,7 +300,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           })}
         </div>
 
-        <div className="absolute top-[20%] w-full flex flex-col items-center z-50 px-10">
+        <div className="absolute top-[18%] w-full flex flex-col items-center z-50 px-10">
            {message && <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 text-center">{message}</div>}
            {gameState.phase === 'PASSING' && gameState.passingCards.length === 3 && (
              <button onClick={handleConfirmPass} className="mt-6 px-10 py-4 bg-green-600 rounded-full font-black text-xl text-white uppercase shadow-2xl animate-bounce border-b-4 border-green-800">Confirm Pass</button>
@@ -308,21 +308,22 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      {/* Cards container pinned as low as possible */}
-      <div className="relative h-[100px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
+      {/* Hand area fixed to absolute bottom with enough height for visibility */}
+      <div className="relative h-[130px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
              const tx = (idx * handSpacing) + startX;
              const centerIdx = (arr.length - 1) / 2;
              const distFromCenter = Math.abs(idx - centerIdx);
-             const rot = (idx - centerIdx) * 1.5; 
+             const rot = (idx - centerIdx) * 2; 
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const passingIndex = gameState.passingCards.indexOf(card.id);
              const isSelectedForPass = passingIndex !== -1;
 
              let finalTx = tx;
-             let finalTy = distFromCenter * 0.8;
+             // Fan upwards (negative Y) so side cards don't drop off screen
+             let finalTy = -distFromCenter * 1.5; 
              let finalRot = rot;
              let finalZIndex = 100 + idx;
 
@@ -330,8 +331,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
                 const centerOfScreen = window.innerWidth / 2;
                 const slotX = centerOfScreen + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
                 finalTx = slotX - startX;
-                // Aligns exactly with slots at bottom-[210px]
-                finalTy = -210; 
+                // Move cards to meet passing slots precisely
+                finalTy = -225; 
                 finalRot = 0;
                 finalZIndex = 500;
              }

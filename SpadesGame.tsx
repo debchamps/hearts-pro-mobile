@@ -217,14 +217,14 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <Avatar player={gameState.players[3]} pos="top-[30%] left-2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[1]} pos="top-[30%] right-2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         
-        {/* YOU Avatar positioned lower, sitting just on top of the cards */}
-        <Avatar player={gameState.players[0]} pos="bottom-[130px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
+        {/* YOU Avatar positioned lower, sitting just on top of the cards area */}
+        <Avatar player={gameState.players[0]} pos="bottom-[135px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[210px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20">Your Turn</div>
+          <div className="absolute bottom-[225px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
         )}
 
-        <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
+        <div className="absolute top-[38%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
              const offsets = [{ x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }];
@@ -238,7 +238,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           })}
         </div>
 
-        <div className="absolute top-[20%] w-full flex flex-col items-center z-50 px-10">
+        <div className="absolute top-[18%] w-full flex flex-col items-center z-50 px-10">
            {message && <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30">{message}</div>}
            {gameState.phase === 'BIDDING' && gameState.turnIndex === 0 && (
              <div className="mt-8 grid grid-cols-5 gap-3 bg-black/80 p-5 rounded-[2.5rem] border border-white/10 backdrop-blur-2xl shadow-2xl">
@@ -251,20 +251,27 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      {/* Cards container pinned as low as possible */}
-      <div className="relative h-[100px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
+      {/* Hand area fixed to absolute bottom with enough height for visibility */}
+      <div className="relative h-[130px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
              const tx = (idx * handSpacing) + startX;
              const centerIdx = (arr.length - 1) / 2;
              const distFromCenter = Math.abs(idx - centerIdx);
-             const rot = (idx - centerIdx) * 1.5; 
+             const rot = (idx - centerIdx) * 2; 
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
+             
+             let finalTx = tx;
+             // Fan upwards (negative Y) so side cards don't drop off screen
+             let finalTy = -distFromCenter * 1.5; 
+             let finalRot = rot;
+             let finalZIndex = 100 + idx;
+
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging ? 'z-[500]' : ''}`}
-                  style={{ transform: `translate3d(${tx}px, ${distFromCenter * 0.8 + dragOffset}px, 0) rotate(${rot}deg) scale(${isDragging ? 1.15 : 1})`, zIndex: isDragging ? 500 : 100 + idx, animationDelay: `${idx * 0.015}s` }}
+                  style={{ transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : 1})`, zIndex: isDragging ? 500 : finalZIndex, animationDelay: `${idx * 0.015}s` }}
                 >
                   <CardView card={card} size="lg" highlighted={isDragging && Math.abs(dragOffset) >= 50} hint={hintCardId === card.id} />
                 </div>
