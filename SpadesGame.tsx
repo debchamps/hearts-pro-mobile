@@ -218,10 +218,10 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <Avatar player={gameState.players[1]} pos="top-[30%] right-2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         
         {/* YOU Avatar positioned lower, sitting just on top of the cards area */}
-        <Avatar player={gameState.players[0]} pos="bottom-[135px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[0]} pos="bottom-[145px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[225px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
+          <div className="absolute bottom-[235px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
         )}
 
         <div className="absolute top-[38%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
