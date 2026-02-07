@@ -269,15 +269,15 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <Avatar player={gameState.players[3]} pos="top-[30%] left-2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[1]} pos="top-[30%] right-2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
         
-        {/* YOU Avatar positioned just above the cards */}
-        <Avatar player={gameState.players[0]} pos="bottom-[160px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
+        {/* YOU Avatar positioned lower, sitting just on top of the cards */}
+        <Avatar player={gameState.players[0]} pos="bottom-[130px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[260px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg">Your Turn</div>
+          <div className="absolute bottom-[210px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20">Your Turn</div>
         )}
 
         {gameState.phase === 'PASSING' && (
-          <div className="absolute bottom-[260px] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
+          <div className="absolute bottom-[210px] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
             {[0, 1, 2].map(i => (
               <div key={i} className="staged-slot rounded-xl flex items-center justify-center" style={{ width: `${SLOT_WIDTH}px`, height: `${SLOT_HEIGHT}px` }}>
                 <span className="text-white/10 font-black text-4xl">?</span>
@@ -286,7 +286,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           </div>
         )}
 
-        <div className="absolute top-[40%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
+        <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
              const offsets = [{ x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }];
@@ -308,7 +308,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      <div className="relative h-56 w-full flex flex-col items-center justify-end pb-[var(--safe-bottom)] z-40 bg-gradient-to-t from-black/80 to-transparent">
+      {/* Cards container pinned as low as possible */}
+      <div className="relative h-[100px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
              const tx = (idx * handSpacing) + startX;
@@ -321,7 +322,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              const isSelectedForPass = passingIndex !== -1;
 
              let finalTx = tx;
-             let finalTy = distFromCenter * 1.8;
+             let finalTy = distFromCenter * 0.8;
              let finalRot = rot;
              let finalZIndex = 100 + idx;
 
@@ -329,8 +330,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
                 const centerOfScreen = window.innerWidth / 2;
                 const slotX = centerOfScreen + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
                 finalTx = slotX - startX;
-                // Meet the slots at bottom-[260px]
-                finalTy = -204; 
+                // Aligns exactly with slots at bottom-[210px]
+                finalTy = -210; 
                 finalRot = 0;
                 finalZIndex = 500;
              }

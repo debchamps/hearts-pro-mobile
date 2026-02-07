@@ -79,7 +79,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       if (prev.currentTrick.length >= 4) return prev;
       const player = prev.players[playerId];
       const card = player.hand.find(c => c.id === cardId)!;
-      const newPlayers = prev.players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => c.id !== cardId) } : p);
+      const newPlayers = prev.players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => cardId !== c.id) } : p);
       return {
         ...prev,
         players: newPlayers,
@@ -217,14 +217,14 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <Avatar player={gameState.players[3]} pos="top-[30%] left-2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[1]} pos="top-[30%] right-2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         
-        {/* YOU Avatar positioned just above the cards */}
-        <Avatar player={gameState.players[0]} pos="bottom-[160px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
+        {/* YOU Avatar positioned lower, sitting just on top of the cards */}
+        <Avatar player={gameState.players[0]} pos="bottom-[130px] left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[260px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg">Your Turn</div>
+          <div className="absolute bottom-[210px] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20">Your Turn</div>
         )}
 
-        <div className="absolute top-[40%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
+        <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
              const offsets = [{ x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }];
@@ -251,7 +251,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      <div className="relative h-56 w-full flex flex-col items-center justify-end pb-[var(--safe-bottom)] z-40 bg-gradient-to-t from-black/80 to-transparent">
+      {/* Cards container pinned as low as possible */}
+      <div className="relative h-[100px] w-full flex flex-col items-center justify-end pb-0 z-40 bg-gradient-to-t from-black/80 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
              const tx = (idx * handSpacing) + startX;
@@ -263,7 +264,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging ? 'z-[500]' : ''}`}
-                  style={{ transform: `translate3d(${tx}px, ${distFromCenter * 1.8 + dragOffset}px, 0) rotate(${rot}deg) scale(${isDragging ? 1.15 : 1})`, zIndex: isDragging ? 500 : 100 + idx, animationDelay: `${idx * 0.015}s` }}
+                  style={{ transform: `translate3d(${tx}px, ${distFromCenter * 0.8 + dragOffset}px, 0) rotate(${rot}deg) scale(${isDragging ? 1.15 : 1})`, zIndex: isDragging ? 500 : 100 + idx, animationDelay: `${idx * 0.015}s` }}
                 >
                   <CardView card={card} size="lg" highlighted={isDragging && Math.abs(dragOffset) >= 50} hint={hintCardId === card.id} />
                 </div>
