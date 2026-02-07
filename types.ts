@@ -31,7 +31,7 @@ export interface TrickCard {
 }
 
 export type GamePhase = 'DEALING' | 'PASSING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
-export type ScreenState = 'MENU' | 'GAME' | 'SETTINGS';
+export type ScreenState = 'HOME' | 'MENU' | 'GAME' | 'SETTINGS';
 
 export interface GameState {
   players: Player[];
