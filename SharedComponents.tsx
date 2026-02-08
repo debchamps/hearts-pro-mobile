@@ -1,6 +1,6 @@
 
 import React, { memo } from 'react';
-import { Card, GamePhase, GameType, Player, HistoryItem, SpadesRoundSummary } from './types';
+import { Card, GamePhase, GameType, Player, HistoryItem, SpadesRoundSummary, CallbreakRoundSummary } from './types';
 import { SUIT_COLORS, SUIT_SYMBOLS } from './constants';
 
 export const Overlay = memo(({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) => (
@@ -41,13 +41,13 @@ export const CardView = memo(({ card, size = 'md', inactive = false, highlighted
 });
 
 export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase }) => {
-  const isSpades = gameType === 'SPADES';
-  const isTeamBlue = isSpades && player.teamId === 0;
+  const isSpades = gameType === 'SPADES' || gameType === 'CALLBREAK';
+  const isTeamBlue = gameType === 'SPADES' && player.teamId === 0;
   
-  const teamColor = isSpades ? (isTeamBlue ? 'border-blue-500' : 'border-rose-500') : 'border-yellow-500/40';
-  const teamGlow = isSpades ? (isTeamBlue ? 'shadow-[0_0_20px_rgba(37,99,235,0.4)]' : 'shadow-[0_0_20px_rgba(244,63,94,0.4)]') : 'shadow-[0_0_15px_rgba(0,0,0,0.3)]';
-  const teamBg = isSpades ? (isTeamBlue ? 'bg-blue-600/20' : 'bg-rose-600/20') : 'bg-black/60';
-  const badgeColor = isSpades ? (isTeamBlue ? 'bg-blue-600' : 'bg-rose-600') : 'bg-yellow-600';
+  const teamColor = gameType === 'CALLBREAK' ? 'border-purple-500' : isSpades ? (isTeamBlue ? 'border-blue-500' : 'border-rose-500') : 'border-yellow-500/40';
+  const teamGlow = gameType === 'CALLBREAK' ? 'shadow-[0_0_15px_rgba(168,85,247,0.3)]' : isSpades ? (isTeamBlue ? 'shadow-[0_0_20px_rgba(37,99,235,0.4)]' : 'shadow-[0_0_20px_rgba(244,63,94,0.4)]') : 'shadow-[0_0_15px_rgba(0,0,0,0.3)]';
+  const teamBg = gameType === 'CALLBREAK' ? 'bg-purple-900/40' : isSpades ? (isTeamBlue ? 'bg-blue-600/20' : 'bg-rose-600/20') : 'bg-black/60';
+  const badgeColor = gameType === 'CALLBREAK' ? 'bg-purple-600' : isSpades ? (isTeamBlue ? 'bg-blue-600' : 'bg-rose-600') : 'bg-yellow-600';
 
   const showBiddingStatus = isSpades && phase === 'BIDDING' && active;
   const hasBidAlready = isSpades && phase === 'BIDDING' && player.bid !== undefined;
@@ -63,7 +63,7 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
         
         {isSpades && player.bid !== undefined && (
            <div className={`absolute -right-3 -bottom-3 ${badgeColor} text-white w-10 h-10 rounded-full flex flex-col items-center justify-center border-2 border-white shadow-2xl animate-deal transform rotate-12 z-30`}>
-              <span className="text-[7px] font-black uppercase leading-none opacity-60">{player.bid === 0 ? 'NIL' : 'BID'}</span>
+              <span className="text-[7px] font-black uppercase leading-none opacity-60">BID</span>
               <span className="text-lg font-black leading-none">{player.bid}</span>
            </div>
         )}
@@ -78,7 +78,7 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
             {gameType === 'HEARTS' ? 'pts' : (player.bid !== undefined ? `/${player.bid}` : '/--')}
           </div>
         </div>
-        {!isSpades && <span className="text-[10px] font-black uppercase text-white/50 tracking-[0.15em] mt-1 drop-shadow-md">{player.name}</span>}
+        {gameType !== 'CALLBREAK' && <span className="text-[10px] font-black uppercase text-white/50 tracking-[0.15em] mt-1 drop-shadow-md">{player.name}</span>}
       </div>
     </div>
   );
@@ -127,6 +127,66 @@ export const HistoryModal = memo(({ history, players, onClose }: { history: Hist
               </div>
             ))
           )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export const CallbreakScorecardModal = memo(({ history, players, onClose }: { history: CallbreakRoundSummary[], players: Player[], onClose: () => void }) => {
+  return (
+    <div className="absolute inset-0 z-[200] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4 animate-fadeIn">
+      <div className="bg-neutral-900 border border-purple-500/30 rounded-[2.5rem] shadow-2xl flex flex-col w-full max-w-xl max-h-[85vh] animate-play overflow-hidden">
+        <div className="p-6 bg-purple-900/20 border-b border-white/10 flex justify-between items-center">
+          <div>
+            <h2 className="text-3xl font-black italic text-yellow-500 uppercase">Callbreak Series</h2>
+            <p className="text-[8px] text-white/30 uppercase tracking-[0.4em]">5-Round Performance Table</p>
+          </div>
+          <button onClick={onClose} className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center text-xl transition-all">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-x-auto p-4">
+          <table className="w-full text-center border-collapse">
+            <thead>
+              <tr className="text-[9px] font-black text-white/40 uppercase tracking-widest border-b border-white/5">
+                <th className="py-4 px-2 text-left">Round</th>
+                {players.map(p => <th key={p.id} className="py-4 px-2">{p.avatar}<br/><span className="text-[7px] text-white/20">{p.name}</span></th>)}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {[1, 2, 3, 4, 5].map(r => {
+                const roundData = history.find(h => h.roundNumber === r);
+                return (
+                  <tr key={r} className="group hover:bg-white/5 transition-colors">
+                    <td className="py-4 px-2 font-black text-white/30 text-lg text-left">#{r}</td>
+                    {players.map(p => {
+                      const pScore = roundData?.scores.find(s => s.playerId === p.id);
+                      return (
+                        <td key={p.id} className="py-4 px-2">
+                           {pScore ? (
+                             <div className="flex flex-col">
+                               <span className={`text-xl font-black ${pScore.scoreChange >= 0 ? 'text-green-500' : 'text-rose-500'}`}>{pScore.scoreChange.toFixed(1)}</span>
+                               <span className="text-[7px] font-black text-white/20 uppercase">T:{pScore.tricks}/B:{pScore.bid}</span>
+                             </div>
+                           ) : <span className="text-white/10 font-black">-</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-purple-900/10 border-t-2 border-purple-500/20">
+                <td className="py-6 px-2 text-left font-black text-yellow-500 uppercase text-[10px] tracking-widest">Total</td>
+                {players.map(p => (
+                  <td key={p.id} className="py-6 px-2">
+                    <span className="text-3xl font-black italic text-white">{p.score.toFixed(1)}</span>
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          </table>
         </div>
       </div>
     </div>

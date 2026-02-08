@@ -5,7 +5,7 @@ import { GameType } from './types';
 const GAMES_LIST = [
   { id: 'hearts', name: 'Hearts', icon: '♥️', available: true, color: 'bg-red-500' },
   { id: 'spades', name: 'Spades', icon: '♠️', available: true, color: 'bg-indigo-600' },
-  { id: 'callbreak', name: 'Callbreak', icon: '👑', available: false, color: 'bg-purple-600' },
+  { id: 'callbreak', name: 'Callbreak', icon: '👑', available: true, color: 'bg-purple-600' },
   { id: 'bray', name: 'Bray', icon: '🃏', available: false, color: 'bg-amber-600' },
   { id: '29', name: '29', icon: '🎴', available: false, color: 'bg-emerald-600' },
   { id: 'bridge', name: 'Bridge', icon: '🌉', available: false, color: 'bg-cyan-600' },

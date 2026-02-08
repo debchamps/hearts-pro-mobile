@@ -10,13 +10,14 @@ export interface Card {
   points: number;
 }
 
-export type GameType = 'HEARTS' | 'SPADES';
+export type GameType = 'HEARTS' | 'SPADES' | 'CALLBREAK';
 
 export interface GameSettings {
   shootTheMoon: boolean;
   noPassing: boolean;
   jackOfDiamonds: boolean;
   targetScore: number;
+  mandatoryOvertrump?: boolean; // For Callbreak
 }
 
 export interface Player {
@@ -63,6 +64,17 @@ export interface SpadesRoundSummary {
   };
 }
 
+export interface CallbreakRoundSummary {
+  roundNumber: number;
+  scores: {
+    playerId: number;
+    bid: number;
+    tricks: number;
+    scoreChange: number;
+    totalAfterRound: number;
+  }[];
+}
+
 export type GamePhase = 'DEALING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
 export type ScreenState = 'HOME' | 'MENU' | 'GAME' | 'SETTINGS';
 
@@ -83,4 +95,5 @@ export interface GameState {
   teamBags: [number, number]; // [Team Blue, Team Red]
   trickHistory: HistoryItem[];
   spadesHistory?: SpadesRoundSummary[];
+  callbreakHistory?: CallbreakRoundSummary[];
 }

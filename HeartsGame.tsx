@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { GameState, Card, GamePhase, GameSettings, Player, Suit, HistoryItem } from './types';
-import { createDeck, shuffle, createDeck as generateDeck } from './constants';
+import { createDeck, shuffle } from './constants';
 import { getBestMove } from './services/heartsAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
@@ -45,6 +45,8 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+  
+  const passingDialogRef = useRef<HTMLDivElement>(null);
 
   // Auto-save game state
   useEffect(() => {
@@ -140,7 +142,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   }, [gameState.players, gameState.settings, gameState.roundNumber]);
 
   useEffect(() => {
-    // Only start round automatically if we are in DEALING phase (new game or new round)
     if (gameState.phase === 'DEALING') {
       const timer = setTimeout(startRound, 600);
       return () => clearTimeout(timer);
@@ -331,6 +332,11 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const SLOT_HEIGHT = 119;
   const SLOT_GAP = 12;
 
+  const getPassingDirectionLabel = () => {
+    const directions = ["LEFT", "RIGHT", "ACROSS"];
+    return directions[(gameState.roundNumber - 1) % 4] || "NONE";
+  };
+
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
       {/* HEADER */}
@@ -347,7 +353,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="absolute top-[12%] left-1/2 -translate-x-1/2 z-[100] w-full flex justify-center pointer-events-none px-6">
-        {message && (
+        {message && gameState.phase !== 'PASSING' && (
           <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">
             {message}
           </div>
@@ -355,18 +361,49 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="h-[70%] relative w-full">
+        {/* DIMMING FILTER: Obscures avatars and central board, but leaves z-40 hand and z-50 header clear */}
+        {gameState.phase === 'PASSING' && (
+          <div className="absolute inset-0 bg-black/75 z-[8] animate-fadeIn" />
+        )}
+
         <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
 
+        {/* PASSING DIALOG: High-end solid design */}
         {gameState.phase === 'PASSING' && (
-          <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="staged-slot rounded-xl flex items-center justify-center" style={{ width: `${SLOT_WIDTH}px`, height: `${SLOT_HEIGHT}px` }}>
-                <span className="text-white/10 font-black text-4xl">?</span>
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[60%] z-[20] w-[90%] max-w-sm flex flex-col items-center animate-fadeIn">
+            <div className="bg-[#121212] border-2 border-[#d4af37] rounded-[3rem] p-8 shadow-[0_30px_60px_-12px_rgba(0,0,0,0.9)] w-full flex flex-col items-center relative overflow-hidden">
+              {/* Subtle light streak for texture */}
+              <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-white/5 to-transparent pointer-events-none" />
+              
+              <div className="mb-6 text-center relative z-10">
+                <h3 className="text-[#d4af37] font-black uppercase text-[12px] tracking-[0.4em] mb-1">STRATEGIC PASS</h3>
+                <div className="text-white text-3xl font-black italic tracking-tighter uppercase leading-none">TO {getPassingDirectionLabel()}</div>
               </div>
-            ))}
+
+              <div className="flex items-center justify-center gap-4 mb-8 relative z-10" ref={passingDialogRef}>
+                {[0, 1, 2].map(i => (
+                  <div key={i} className="staged-slot rounded-xl flex items-center justify-center border-2 border-[#d4af37]/20 bg-black/40 overflow-hidden" style={{ width: `${SLOT_WIDTH}px`, height: `${SLOT_HEIGHT}px` }}>
+                    <span className="text-white/5 font-black text-6xl">?</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="h-14 w-full relative z-10">
+                {gameState.passingCards.length === 3 && (
+                  <button onClick={handleConfirmPass} className="w-full h-full bg-green-600 hover:bg-green-500 rounded-2xl font-black text-lg text-white uppercase shadow-[0_8px_0_rgb(21,128,61)] active:shadow-none active:translate-y-2 transition-all pointer-events-auto">
+                    Confirm Selection
+                  </button>
+                )}
+                {gameState.passingCards.length < 3 && (
+                  <div className="w-full h-full flex items-center justify-center text-[#d4af37]/40 text-[10px] font-black uppercase tracking-widest border border-[#d4af37]/20 rounded-2xl bg-black/30">
+                    Choose {3 - gameState.passingCards.length} Cards
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -399,17 +436,9 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
              );
           })}
         </div>
-
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full flex flex-col items-center z-50 px-10 text-center pointer-events-none">
-           {gameState.phase === 'PASSING' && gameState.passingCards.length === 3 && (
-             <button onClick={handleConfirmPass} className="mt-6 px-10 py-4 bg-green-600 rounded-full font-black text-xl text-white uppercase shadow-2xl animate-bounce border-b-4 border-green-800 pointer-events-auto">
-               Confirm Pass
-             </button>
-           )}
-        </div>
       </div>
 
-      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
+      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {handLayout.map((item, idx, arr) => {
              const { card, x: tx, isPlayable } = item;
@@ -421,26 +450,32 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const passingIndex = gameState.passingCards.indexOf(card.id);
              const isSelectedForPass = passingIndex !== -1;
+             
              let finalTx = tx;
              let finalTy = ty; 
              let finalRot = rot;
              let finalZIndex = 100 + idx;
-             if (isSelectedForPass) {
-                const centerOfScreen = window.innerWidth / 2;
-                const slotX = centerOfScreen + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
+
+             if (isSelectedForPass && passingDialogRef.current) {
+                const dialogRect = passingDialogRef.current.getBoundingClientRect();
+                const centerOfDialogX = dialogRect.left + dialogRect.width / 2;
+                const slotX = centerOfDialogX + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
+                
                 finalTx = slotX;
-                finalTy = -200; 
+                finalTy = -(window.innerHeight * 0.45); 
                 finalRot = 0;
                 finalZIndex = 500;
              }
+
              const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
-                  className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[500]' : ''}`}
+                  className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[600]' : ''}`}
                   style={{ 
                     transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : (isSelectedForPass ? 1.0 : (isDimmed ? 0.95 : 1))})`, 
-                    zIndex: isDragging ? 600 : finalZIndex, 
-                    animationDelay: `${idx * 0.015}s` 
+                    zIndex: isDragging ? 700 : finalZIndex, 
+                    animationDelay: `${idx * 0.015}s`,
+                    pointerEvents: gameState.phase === 'PASSING' || (gameState.phase === 'PLAYING' && gameState.turnIndex === 0) ? 'auto' : 'none'
                   }}
                 >
                   <CardView 
@@ -450,11 +485,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
                     hint={hintCardId === card.id}
                     inactive={isDimmed}
                   />
-                  {isSelectedForPass && (
-                     <div className="absolute -top-1.5 -right-1.5 w-6 h-6 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-black shadow-lg animate-bounce">
-                        {passingIndex + 1}
-                     </div>
-                  )}
                 </div>
              );
            })}

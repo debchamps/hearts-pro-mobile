@@ -4,7 +4,8 @@ import { ScreenState, GameType, Player, GameState } from './types';
 import { Home } from './Home';
 import { HeartsGame } from './HeartsGame';
 import { SpadesGame } from './SpadesGame';
-import { persistenceService, SavedGameData } from './services/persistence';
+import { CallbreakGame } from './CallbreakGame';
+import { persistenceService } from './services/persistence';
 
 const INITIAL_PLAYERS: Player[] = [
   { id: 0, name: 'YOU', avatar: '👤', hand: [], score: 0, currentRoundScore: 0, isHuman: true, teamId: 0, tricksWon: 0 },
@@ -32,11 +33,9 @@ export default function App() {
   }, []);
 
   const handleSelectGame = (type: GameType) => {
-    // Clear any resume state if starting a fresh game
     setResumedState(null);
     setGameType(type);
     setScreen('GAME');
-    // Clear old save when starting new
     persistenceService.clearGame();
   };
 
@@ -52,7 +51,6 @@ export default function App() {
   const handleExitGame = () => {
     setScreen('HOME');
     setResumedState(null);
-    // Re-check if a save still exists (it should, unless game was finished)
     persistenceService.loadGame().then(saved => setHasSavedGame(!!saved));
   };
 
@@ -70,6 +68,19 @@ export default function App() {
       return (
         <div className="felt-bg h-screen w-full">
           <SpadesGame 
+            initialPlayers={INITIAL_PLAYERS} 
+            initialState={resumedState}
+            onExit={handleExitGame} 
+            soundEnabled={soundEnabled} 
+          />
+        </div>
+      );
+    }
+
+    if (gameType === 'CALLBREAK') {
+      return (
+        <div className="felt-bg h-screen w-full">
+          <CallbreakGame 
             initialPlayers={INITIAL_PLAYERS} 
             initialState={resumedState}
             onExit={handleExitGame} 
