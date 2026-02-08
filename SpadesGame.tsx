@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { GameState, Card, GamePhase, GameSettings, Player } from './types';
+import { GameState, Card, GamePhase, GameSettings, Player, HistoryItem } from './types';
 import { createDeck, shuffle } from './constants';
 import { getSpadesBid, getSpadesMove } from './services/spadesAi';
-import { Avatar, CardView, Overlay } from './SharedComponents';
+import { Avatar, CardView, Overlay, HistoryModal } from './SharedComponents';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -33,12 +33,14 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     passingCards: [],
     settings: { targetScore: 500, shootTheMoon: false, noPassing: true, jackOfDiamonds: false },
     teamScores: [0, 0],
-    teamBags: [0, 0]
+    teamBags: [0, 0],
+    trickHistory: []
   });
 
   const [message, setMessage] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [clearingTrick, setClearingTrick] = useState<{ winnerId: number } | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
@@ -80,7 +82,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       turnIndex: (prev.dealerIndex + 1) % 4,
       currentTrick: [],
       leadSuit: null,
-      spadesBroken: false
+      spadesBroken: false,
+      trickHistory: []
     }));
     setMessage("Place your Bids");
   }, [gameState.players, gameState.dealerIndex, gameState.settings]);
@@ -173,9 +176,18 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         }
         setClearingTrick({ winnerId: winner.playerId });
         if (soundEnabled) playSound(SOUNDS.CLEAR, 0.4);
+
+        const historyItem: HistoryItem = {
+          trick: [...gameState.currentTrick],
+          winnerId: winner.playerId,
+          leadSuit: gameState.leadSuit
+        };
+
         setTimeout(() => {
           setGameState(prev => {
             const newPlayers = prev.players.map(p => p.id === winner.playerId ? { ...p, tricksWon: (p.tricksWon || 0) + 1 } : p);
+            const newHistory = [...prev.trickHistory, historyItem];
+
             if (newPlayers[0].hand.length === 0) {
               const team0Bid = newPlayers[0].bid! + newPlayers[2].bid!;
               const team1Bid = newPlayers[1].bid! + newPlayers[3].bid!;
@@ -186,15 +198,15 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
               if (team1Tricks >= team1Bid) { s1 += team1Bid * 10 + (team1Tricks - team1Bid); b1 += (team1Tricks - team1Bid); } else s1 -= team1Bid * 10;
               if (b0 >= 10) { s0 -= 100; b0 -= 10; } if (b1 >= 10) { s1 -= 100; b1 -= 10; }
               const over = s0 >= 500 || s1 >= 500;
-              return { ...prev, players: newPlayers, teamScores: [s0, s1], teamBags: [b0, b1], phase: over ? 'GAME_OVER' : 'ROUND_END', currentTrick: [], leadSuit: null, dealerIndex: (prev.dealerIndex + 1) % 4 };
+              return { ...prev, players: newPlayers, teamScores: [s0, s1], teamBags: [b0, b1], phase: over ? 'GAME_OVER' : 'ROUND_END', currentTrick: [], leadSuit: null, dealerIndex: (prev.dealerIndex + 1) % 4, trickHistory: newHistory };
             }
-            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId };
+            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId, trickHistory: newHistory };
           });
           setClearingTrick(null);
         }, 850);
       }, 800);
     }
-  }, [gameState.currentTrick, soundEnabled]);
+  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit]);
 
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
@@ -206,25 +218,33 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     setMessage("");
   };
 
+  // Fixed safe margin for the leftmost card
+  const START_X_PADDING = 16;
+  // Reduced card width (0.95x of original 5.8rem -> ~88px)
+  const CARD_WIDTH = 88;
+
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
-    const containerWidth = Math.min(window.innerWidth, 550) - 80;
-    const spacing = (containerWidth - 93) / (count - 1);
-    return Math.max(28, Math.min(45, spacing));
+    
+    // Rule: Rightmost card can be 50% hidden.
+    // Max width we can take is windowWidth + (CARD_WIDTH / 2) - START_X_PADDING
+    const availableWidth = window.innerWidth + (CARD_WIDTH / 2) - (START_X_PADDING * 2);
+    const idealSpacing = 40; // Looks good left-anchored
+    
+    // Ensure we don't exceed the 50% visibility rule on the right
+    const maxSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
+    
+    return Math.min(idealSpacing, maxSpacing);
   }, [gameState.players[0].hand.length]);
 
-  const startX = useMemo(() => {
-    const totalHandWidth = ((gameState.players[0].hand.length - 1) * handSpacing) + 93;
-    // Offset nudged to +12px for better centering while ensuring left side doesn't clip
-    return (window.innerWidth - totalHandWidth) / 2 + 12;
-  }, [gameState.players[0].hand.length, handSpacing]);
+  const startX = START_X_PADDING;
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
-      {/* HEADER: 10% */}
+      {/* HEADER */}
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
-        <button onClick={onExit} className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">🏠</button>
+        <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
         <div className="flex items-center bg-black/60 rounded-lg overflow-hidden border border-white/10 h-10 w-48 shadow-lg">
           <div className="flex-1 bg-blue-700 h-full flex flex-col items-center justify-center leading-none">
             <span className="text-[14px] font-black">{gameState.teamScores[0]}</span>
@@ -236,14 +256,14 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
             <span className="text-[7px] font-black opacity-50">RED</span>
           </div>
         </div>
-        <div className="w-8" />
+        <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
       </div>
 
-      {/* PLAY AREA: 70% */}
+      {/* PLAY AREA */}
       <div className="h-[70%] relative w-full">
         <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-4 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-4 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
@@ -255,19 +275,13 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
              const offsets = [
-               { x: 0, y: spread, rot: '0deg' },    // You (P0)
-               { x: spread, y: 0, rot: '15deg' },   // Fish (P1)
-               { x: 0, y: -spread, rot: '-5deg' },  // Snake (P2)
-               { x: -spread, y: 0, rot: '-15deg' }  // Shrimp (P3)
+               { x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
              
              const startPos = [
-                { x: 0, y: 350 },    // P0: Bottom
-                { x: 380, y: 0 },    // P1: Right
-                { x: 0, y: -350 },   // P2: Top
-                { x: -380, y: 0 }    // P3: Left
+                { x: 0, y: 350 }, { x: 350, y: 0 }, { x: 0, y: -350 }, { x: -350, y: 0 }
              ][t.playerId];
 
              return (
@@ -301,7 +315,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      {/* HAND AREA: 20% - Subtle Arc Distribution */}
+      {/* HAND AREA */}
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
@@ -309,9 +323,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              const centerIdx = (arr.length - 1) / 2;
              const diffFromCenter = idx - centerIdx;
              
-             // Very subtle arc effect for better usability and visibility
-             const rot = diffFromCenter * 1.2; 
-             const ty = Math.pow(diffFromCenter, 2) * 0.45;
+             const rot = diffFromCenter * 2; 
+             const ty = Math.pow(diffFromCenter, 2) * 0.8;
              
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
@@ -330,6 +343,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
            })}
         </div>
       </div>
+
+      {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND END"} subtitle="Standings Update">

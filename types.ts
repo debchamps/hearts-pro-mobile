@@ -37,6 +37,12 @@ export interface TrickCard {
   card: Card;
 }
 
+export interface HistoryItem {
+  trick: TrickCard[];
+  winnerId: number;
+  leadSuit: Suit | null;
+}
+
 export type GamePhase = 'DEALING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
 export type ScreenState = 'HOME' | 'MENU' | 'GAME' | 'SETTINGS';
 
@@ -55,4 +61,5 @@ export interface GameState {
   settings: GameSettings;
   teamScores: [number, number]; // [Team Blue, Team Red]
   teamBags: [number, number]; // [Team Blue, Team Red]
+  trickHistory: HistoryItem[];
 }
