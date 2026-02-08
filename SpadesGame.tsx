@@ -54,13 +54,13 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   }, [message]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo({ id, startY: clientY, currentY: clientY });
   };
 
   const onDragMove = (e: React.MouseEvent | React.TouchEvent) => {
     if (!dragInfo) return;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo(prev => prev ? { ...prev, currentY: clientY } : null);
   };
 
@@ -305,8 +305,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       {/* PLAY AREA */}
       <div className="h-[70%] relative w-full">
         <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-2 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-2 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
@@ -345,14 +345,17 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           })}
         </div>
 
-        {/* Action Buttons Area */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full flex flex-col items-center z-50 px-10 text-center pointer-events-none">
+        {/* Action Buttons Area - Repositioned to bottom-1/4 to avoid side avatars */}
+        <div className="absolute bottom-[25%] left-1/2 -translate-x-1/2 w-full flex flex-col items-center z-50 px-10 text-center pointer-events-none">
            {gameState.phase === 'BIDDING' && gameState.turnIndex === 0 && (
-             <div className="mt-8 grid grid-cols-5 gap-3 bg-black/80 p-5 rounded-[2.5rem] border border-white/10 backdrop-blur-2xl shadow-2xl pointer-events-auto">
-               {[1,2,3,4,5,6,7,8,9,10,11,12,13].map(b => (
-                 <button key={b} onClick={() => handleBid(b)} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-yellow-500 hover:text-black font-black text-lg transition-all active:scale-90"> {b} </button>
-               ))}
-               <button onClick={() => handleBid(0)} className="col-span-2 h-10 rounded-xl bg-rose-500 font-black text-sm uppercase">NIL</button>
+             <div className="bg-black/85 p-6 rounded-[2.5rem] border border-white/20 backdrop-blur-2xl shadow-2xl pointer-events-auto flex flex-col items-center max-w-xs animate-fadeIn">
+               <h3 className="text-yellow-500 font-black uppercase text-[11px] tracking-[0.3em] mb-4 animate-pulse">How many tricks?</h3>
+               <div className="grid grid-cols-5 gap-2">
+                 {[1,2,3,4,5,6,7,8,9,10,11,12,13].map(b => (
+                   <button key={b} onClick={() => handleBid(b)} className="w-9 h-9 rounded-lg bg-white/10 hover:bg-yellow-500 hover:text-black font-black text-sm transition-all active:scale-90 border border-white/5"> {b} </button>
+                 ))}
+                 <button onClick={() => handleBid(0)} className="col-span-2 h-9 rounded-lg bg-rose-600 hover:bg-rose-500 font-black text-[10px] uppercase border border-white/10">NIL</button>
+               </div>
              </div>
            )}
         </div>
