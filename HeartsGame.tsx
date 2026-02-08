@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { GameState, Card, GamePhase, GameSettings, Player, Suit } from './types';
+import { GameState, Card, GamePhase, GameSettings, Player, Suit, HistoryItem } from './types';
 import { createDeck, shuffle } from './constants';
 import { getBestMove } from './services/heartsAi';
-import { Avatar, CardView, Overlay } from './SharedComponents';
+import { Avatar, CardView, Overlay, HistoryModal } from './SharedComponents';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -33,12 +33,14 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     passingCards: [],
     settings: { targetScore: 100, shootTheMoon: true, noPassing: false, jackOfDiamonds: false },
     teamScores: [0, 0],
-    teamBags: [0, 0]
+    teamBags: [0, 0],
+    trickHistory: []
   });
 
   const [message, setMessage] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [clearingTrick, setClearingTrick] = useState<{ winnerId: number } | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
@@ -91,7 +93,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         leadSuit: null, 
         heartsBroken: false, 
         turnIndex: turnIdx,
-        passingCards: [] 
+        passingCards: [],
+        trickHistory: []
       };
     });
     
@@ -202,24 +205,33 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         }
         setClearingTrick({ winnerId: winner.playerId });
         if (soundEnabled) playSound(SOUNDS.CLEAR, 0.4);
+        
+        const historyItem: HistoryItem = {
+          trick: [...gameState.currentTrick],
+          winnerId: winner.playerId,
+          leadSuit: gameState.leadSuit
+        };
+
         setTimeout(() => {
           setGameState(prev => {
             const trickPoints = prev.currentTrick.reduce((s, t) => s + t.card.points, 0);
             const newPlayers = prev.players.map(p => p.id === winner.playerId ? { ...p, currentRoundScore: p.currentRoundScore + trickPoints } : p);
+            const newHistory = [...prev.trickHistory, historyItem];
+
             if (newPlayers[0].hand.length === 0) {
               let shooterId = -1;
               if (prev.settings.shootTheMoon) newPlayers.forEach(p => { if (p.currentRoundScore === 26) shooterId = p.id; });
               const finalPlayers = newPlayers.map(p => ({ ...p, score: p.score + (shooterId !== -1 ? (p.id === shooterId ? 0 : 26) : p.currentRoundScore), currentRoundScore: 0 }));
               const over = finalPlayers.some(p => p.score >= prev.settings.targetScore);
-              return { ...prev, players: finalPlayers, phase: over ? 'GAME_OVER' : 'ROUND_END', currentTrick: [], leadSuit: null, dealerIndex: (prev.dealerIndex + 1) % 4 };
+              return { ...prev, players: finalPlayers, phase: over ? 'GAME_OVER' : 'ROUND_END', currentTrick: [], leadSuit: null, dealerIndex: (prev.dealerIndex + 1) % 4, trickHistory: newHistory };
             }
-            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId };
+            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId, trickHistory: newHistory };
           });
           setClearingTrick(null);
         }, 850);
       }, 800);
     }
-  }, [gameState.currentTrick, soundEnabled]);
+  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit]);
 
   const handleHumanInteract = (card: Card) => {
     if (isProcessing || clearingTrick) return;
@@ -248,56 +260,53 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     }
   };
 
+  // Fixed safe margin for the leftmost card
+  const START_X_PADDING = 16;
+  // Reduced card width (0.95x of original 5.8rem -> ~88px)
+  const CARD_WIDTH = 88;
+
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
-    const containerWidth = Math.min(window.innerWidth, 550) - 80;
-    const spacing = (containerWidth - 93) / (count - 1);
-    return Math.max(28, Math.min(45, spacing));
+    
+    // Rule: Rightmost card can be 50% hidden.
+    // Max width we can take is windowWidth + (CARD_WIDTH / 2) - START_X_PADDING
+    const availableWidth = window.innerWidth + (CARD_WIDTH / 2) - (START_X_PADDING * 2);
+    const idealSpacing = 40; // Looks good left-anchored
+    
+    // Ensure we don't exceed the 50% visibility rule on the right
+    const maxSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
+    
+    return Math.min(idealSpacing, maxSpacing);
   }, [gameState.players[0].hand.length]);
 
-  const startX = useMemo(() => {
-    const totalHandWidth = ((gameState.players[0].hand.length - 1) * handSpacing) + 93;
-    // Offset nudged to +12px for better centering while ensuring left side doesn't clip
-    return (window.innerWidth - totalHandWidth) / 2 + 12;
-  }, [gameState.players[0].hand.length, handSpacing]);
+  const startX = START_X_PADDING;
 
-  const SLOT_WIDTH = 93;
-  const SLOT_HEIGHT = 125;
+  const SLOT_WIDTH = 88;
+  const SLOT_HEIGHT = 119;
   const SLOT_GAP = 12;
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
-      {/* HEADER: 10% */}
+      {/* HEADER */}
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
-        <button onClick={onExit} className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">🏠</button>
+        <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
         <div className="text-center">
           <span className="text-[8px] text-white/40 font-black uppercase tracking-widest block leading-none mb-1">Round</span>
           <span className="text-3xl font-black italic text-yellow-500">{gameState.roundNumber}</span>
         </div>
-        <div className="w-8" />
+        <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
       </div>
 
-      {/* PLAY AREA: 70% */}
+      {/* PLAY AREA */}
       <div className="h-[70%] relative w-full">
-        {/* Diamond formation */}
         <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="HEARTS" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-4 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-4 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
           <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
-        )}
-
-        {gameState.phase === 'PASSING' && (
-          <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="staged-slot rounded-xl flex items-center justify-center" style={{ width: `${SLOT_WIDTH}px`, height: `${SLOT_HEIGHT}px` }}>
-                <span className="text-white/10 font-black text-4xl">?</span>
-              </div>
-            ))}
-          </div>
         )}
 
         {/* Trick Area */}
@@ -305,19 +314,13 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
              const offsets = [
-               { x: 0, y: spread, rot: '0deg' },    // You (P0)
-               { x: spread, y: 0, rot: '15deg' },   // Fish (P1)
-               { x: 0, y: -spread, rot: '-5deg' },  // Snake (P2)
-               { x: -spread, y: 0, rot: '-15deg' }  // Shrimp (P3)
+               { x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
              
              const startPos = [
-                { x: 0, y: 350 },    // P0: Bottom
-                { x: 380, y: 0 },    // P1: Right
-                { x: 0, y: -350 },   // P2: Top
-                { x: -380, y: 0 }    // P3: Left
+                { x: 0, y: 350 }, { x: 350, y: 0 }, { x: 0, y: -350 }, { x: -350, y: 0 }
              ][t.playerId];
 
              return (
@@ -339,14 +342,14 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
 
         <div className="absolute top-[20%] w-full flex flex-col items-center z-50 px-10 text-center">
-           {message && <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30">{message}</div>}
+           {message && <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 text-center">{message}</div>}
            {gameState.phase === 'PASSING' && gameState.passingCards.length === 3 && (
              <button onClick={handleConfirmPass} className="mt-6 px-10 py-4 bg-green-600 rounded-full font-black text-xl text-white uppercase shadow-2xl animate-bounce border-b-4 border-green-800">Confirm Pass</button>
            )}
         </div>
       </div>
 
-      {/* HAND AREA: 20% - Subtle Arc Distribution */}
+      {/* HAND AREA */}
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {gameState.players[0].hand.map((card, idx, arr) => {
@@ -354,9 +357,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              const centerIdx = (arr.length - 1) / 2;
              const diffFromCenter = idx - centerIdx;
              
-             // Very subtle arc effect for better usability and visibility
-             const rot = diffFromCenter * 1.2; 
-             const ty = Math.pow(diffFromCenter, 2) * 0.45; 
+             const rot = diffFromCenter * 2; 
+             const ty = Math.pow(diffFromCenter, 2) * 0.8; 
              
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
@@ -393,6 +395,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
            })}
         </div>
       </div>
+
+      {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND END"} subtitle="Standings Update">
