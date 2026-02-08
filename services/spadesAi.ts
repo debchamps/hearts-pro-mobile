@@ -80,7 +80,7 @@ export async function getSpadesMove(
 
   if (playable.length === 0) return '';
 
-  // --- LEADING LOGIC ---
+  // --- LEADING STRATEGY ---
   if (!leadSuit || currentTrick.length === 0) {
     // 1. Nil Protection: Lead high to clear path for Nil partner
     if (isPartnerNil) {
@@ -143,6 +143,12 @@ export async function getSpadesMove(
        return c.suit === winningCard.suit && c.value > winningCard.value;
     }).sort((a,b) => a.value - b.value);
     if (overtakers.length > 0) return overtakers[0].id;
+  }
+
+  // NEW: 4th Player Optimization - If partner is winning, duck (play lowest) to save resources
+  if (currentTrick.length === 3 && partnerIsWinning && me.bid !== 0) {
+    // Partner has already won, we are the last player. Save high cards or trumps.
+    return playable.sort((a, b) => a.value - b.value)[0].id;
   }
 
   // 2. Ducking: Partner has it, or we don't need it

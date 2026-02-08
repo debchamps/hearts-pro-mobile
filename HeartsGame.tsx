@@ -278,12 +278,14 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     if (count <= 1) return 0;
     const availableWidth = window.innerWidth - (SIDE_MARGIN * 2);
     const idealSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
-    return Math.max(22, Math.min(45, idealSpacing));
+    // Expand minimum compression to allow hand to fit safely on ultra-small screens
+    return Math.max(18, Math.min(45, idealSpacing));
   }, [gameState.players[0].hand.length]);
 
   const startX = useMemo(() => {
     const count = gameState.players[0].hand.length;
     const totalHandWidth = ((count - 1) * handSpacing) + CARD_WIDTH;
+    // CRITICAL: Ensure startX is never negative, pushing the leftmost card off-screen
     return Math.max(SIDE_MARGIN, (window.innerWidth - totalHandWidth) / 2);
   }, [gameState.players[0].hand.length, handSpacing]);
 
