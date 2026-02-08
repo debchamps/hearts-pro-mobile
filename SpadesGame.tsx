@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameState, Card, GamePhase, GameSettings, Player, HistoryItem } from './types';
 import { createDeck, shuffle } from './constants';
 import { getSpadesBid, getSpadesMove } from './services/spadesAi';
-import { Avatar, CardView, Overlay, HistoryModal } from './SharedComponents';
+import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -41,8 +41,17 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   const [isProcessing, setIsProcessing] = useState(false);
   const [clearingTrick, setClearingTrick] = useState<{ winnerId: number } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+
+  // Auto-clear message after 2 seconds
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => setMessage(""), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
     const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -97,6 +106,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
 
   const playCard = useCallback((playerId: number, cardId: string) => {
     if (soundEnabled) playSound(SOUNDS.PLAY, 0.4);
+    if (playerId === 0) setMessage("");
     setGameState(prev => {
       if (prev.currentTrick.length >= 4) return prev;
       const player = prev.players[playerId];
@@ -115,6 +125,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   }, [soundEnabled]);
 
   const handleBid = (bid: number) => {
+    setMessage("");
     setGameState(prev => {
       const newPlayers = prev.players.map(p => p.id === 0 ? { ...p, bid } : p);
       const allBid = newPlayers.every(p => p.bid !== undefined);
@@ -215,36 +226,33 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) { setMessage(`Must follow ${gameState.leadSuit}`); return; }
     if (!gameState.leadSuit && card.suit === 'SPADES' && !gameState.spadesBroken && !hand.every(c => c.suit === 'SPADES')) { setMessage("Spades not broken"); return; }
     playCard(0, card.id);
-    setMessage("");
   };
 
-  // Fixed safe margin for the leftmost card
-  const START_X_PADDING = 16;
-  // Reduced card width (0.95x of original 5.8rem -> ~88px)
   const CARD_WIDTH = 88;
+  const SIDE_MARGIN = 16; 
 
   const handSpacing = useMemo(() => {
     const count = gameState.players[0].hand.length;
     if (count <= 1) return 0;
-    
-    // Rule: Rightmost card can be 50% hidden.
-    // Max width we can take is windowWidth + (CARD_WIDTH / 2) - START_X_PADDING
-    const availableWidth = window.innerWidth + (CARD_WIDTH / 2) - (START_X_PADDING * 2);
-    const idealSpacing = 40; // Looks good left-anchored
-    
-    // Ensure we don't exceed the 50% visibility rule on the right
-    const maxSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
-    
-    return Math.min(idealSpacing, maxSpacing);
+    const availableWidth = window.innerWidth - (SIDE_MARGIN * 2);
+    const idealSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
+    return Math.max(22, Math.min(45, idealSpacing));
   }, [gameState.players[0].hand.length]);
 
-  const startX = START_X_PADDING;
+  const startX = useMemo(() => {
+    const count = gameState.players[0].hand.length;
+    const totalHandWidth = ((count - 1) * handSpacing) + CARD_WIDTH;
+    return Math.max(SIDE_MARGIN, (window.innerWidth - totalHandWidth) / 2);
+  }, [gameState.players[0].hand.length, handSpacing]);
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
       {/* HEADER */}
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
-        <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
+        <div className="flex gap-2">
+          <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
+          <button onClick={() => setShowHowToPlay(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">?</button>
+        </div>
         <div className="flex items-center bg-black/60 rounded-lg overflow-hidden border border-white/10 h-10 w-48 shadow-lg">
           <div className="flex-1 bg-blue-700 h-full flex flex-col items-center justify-center leading-none">
             <span className="text-[14px] font-black">{gameState.teamScores[0]}</span>
@@ -259,11 +267,20 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
       </div>
 
+      {/* MESSAGE OVERLAY */}
+      <div className="absolute top-[12%] left-1/2 -translate-x-1/2 z-[100] w-full flex justify-center pointer-events-none px-6">
+        {message && (
+          <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">
+            {message}
+          </div>
+        )}
+      </div>
+
       {/* PLAY AREA */}
       <div className="h-[70%] relative w-full">
         <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-4 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-4 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
         {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
@@ -281,7 +298,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
              
              const startPos = [
-                { x: 0, y: 350 }, { x: 350, y: 0 }, { x: 0, y: -350 }, { x: -350, y: 0 }
+                { x: 0, y: 350 }, { x: 380, y: 0 }, { x: 0, y: -350 }, { x: -380, y: 0 }
              ][t.playerId];
 
              return (
@@ -302,10 +319,10 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           })}
         </div>
 
-        <div className="absolute top-[20%] w-full flex flex-col items-center z-50 px-10 text-center">
-           {message && <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30">{message}</div>}
+        {/* Action Buttons Area */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full flex flex-col items-center z-50 px-10 text-center pointer-events-none">
            {gameState.phase === 'BIDDING' && gameState.turnIndex === 0 && (
-             <div className="mt-8 grid grid-cols-5 gap-3 bg-black/80 p-5 rounded-[2.5rem] border border-white/10 backdrop-blur-2xl shadow-2xl">
+             <div className="mt-8 grid grid-cols-5 gap-3 bg-black/80 p-5 rounded-[2.5rem] border border-white/10 backdrop-blur-2xl shadow-2xl pointer-events-auto">
                {[1,2,3,4,5,6,7,8,9,10,11,12,13].map(b => (
                  <button key={b} onClick={() => handleBid(b)} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-yellow-500 hover:text-black font-black text-lg transition-all active:scale-90"> {b} </button>
                ))}
@@ -323,8 +340,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              const centerIdx = (arr.length - 1) / 2;
              const diffFromCenter = idx - centerIdx;
              
-             const rot = diffFromCenter * 2; 
-             const ty = Math.pow(diffFromCenter, 2) * 0.8;
+             const rot = diffFromCenter * 1.5; 
+             const ty = Math.pow(diffFromCenter, 2) * 0.45;
              
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
@@ -345,6 +362,7 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       </div>
 
       {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
+      {showHowToPlay && <HowToPlayModal gameType="SPADES" onClose={() => setShowHowToPlay(false)} />}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND END"} subtitle="Standings Update">

@@ -13,7 +13,6 @@ export const Overlay = memo(({ title, subtitle, children, fullWidth = false }: {
 
 export const CardView = memo(({ card, size = 'md', inactive = false, highlighted = false, hint = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean }) => {
   if (!card) return null;
-  // Sizes reduced by 0.95x: sm (2.85rem), md (4.75rem), lg (5.51rem)
   const dims = size === 'sm' ? 'w-[2.85rem] h-[3.8rem] p-1' : size === 'md' ? 'w-[4.75rem] h-[6.33rem] p-2' : 'w-[5.51rem] h-[7.41rem] p-2';
   const rankStyle = size === 'sm' ? 'text-[9px]' : size === 'md' ? 'text-md' : 'text-lg';
   const cornerSymStyle = size === 'sm' ? 'text-[5px]' : size === 'md' ? 'text-[9px]' : 'text-xs';
@@ -118,6 +117,72 @@ export const HistoryModal = memo(({ history, players, onClose }: { history: Hist
             </div>
           ))
         )}
+      </div>
+    </div>
+  );
+});
+
+export const HowToPlayModal = memo(({ gameType, onClose }: { gameType: GameType, onClose: () => void }) => {
+  const isHearts = gameType === 'HEARTS';
+  
+  return (
+    <div className="absolute inset-0 z-[250] bg-black/95 backdrop-blur-3xl flex flex-col animate-play pt-[var(--safe-top)]">
+      <div className="p-6 flex justify-between items-center border-b border-white/10">
+        <div>
+          <h2 className="text-3xl font-black italic text-yellow-500 uppercase">How to Play</h2>
+          <p className="text-[8px] text-white/30 uppercase tracking-[0.3em]">{gameType} Guide</p>
+        </div>
+        <button onClick={onClose} className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-2xl">✕</button>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto p-8 space-y-8">
+        <section>
+          <h3 className="text-yellow-500 font-black uppercase text-sm tracking-widest mb-3">Objective</h3>
+          <p className="text-white/80 text-sm leading-relaxed">
+            {isHearts 
+              ? "The goal of Hearts is to finish with the lowest score. The game ends when a player reaches 100 points."
+              : "Spades is a trick-taking game where teams bid on how many tricks they can win. Reach 500 points to win!"}
+          </p>
+        </section>
+
+        <section>
+          <h3 className="text-yellow-500 font-black uppercase text-sm tracking-widest mb-3">Card Points</h3>
+          <div className="bg-white/5 rounded-2xl p-4 border border-white/5 space-y-2">
+            {isHearts ? (
+              <>
+                <div className="flex justify-between text-sm"><span className="text-white/60">Each Heart card</span><span className="font-bold text-red-500">1 Point</span></div>
+                <div className="flex justify-between text-sm"><span className="text-white/60">Queen of Spades</span><span className="font-bold text-red-500">13 Points</span></div>
+                <div className="flex justify-between text-sm"><span className="text-white/60">Shooting the Moon</span><span className="font-bold text-green-500">0 Pts (Others +26)</span></div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between text-sm"><span className="text-white/60">Successful Bid</span><span className="font-bold text-green-500">Bid × 10</span></div>
+                <div className="flex justify-between text-sm"><span className="text-white/60">Extra Tricks (Bags)</span><span className="font-bold text-yellow-500">1 Pt each</span></div>
+                <div className="flex justify-between text-sm"><span className="text-white/60">10 Bags Penalty</span><span className="font-bold text-red-500">-100 Points</span></div>
+                <div className="flex justify-between text-sm"><span className="text-white/60">Failed Bid</span><span className="font-bold text-red-500">-(Bid × 10)</span></div>
+              </>
+            )}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-yellow-500 font-black uppercase text-sm tracking-widest mb-3">Rules & Gameplay</h3>
+          <ul className="space-y-4">
+            {isHearts ? (
+              <>
+                <li className="flex gap-3"><span className="text-yellow-500">●</span><p className="text-xs text-white/60 leading-relaxed"><strong className="text-white uppercase block mb-1">The Lead</strong>The player with the 2 of Clubs leads the first trick.</p></li>
+                <li className="flex gap-3"><span className="text-yellow-500">●</span><p className="text-xs text-white/60 leading-relaxed"><strong className="text-white uppercase block mb-1">Follow Suit</strong>You must follow the lead suit if you have it. If not, you can discard any card.</p></li>
+                <li className="flex gap-3"><span className="text-yellow-500">●</span><p className="text-xs text-white/60 leading-relaxed"><strong className="text-white uppercase block mb-1">Breaking Hearts</strong>You cannot lead with Hearts until a Heart has been discarded on a previous trick.</p></li>
+              </>
+            ) : (
+              <>
+                <li className="flex gap-3"><span className="text-yellow-500">●</span><p className="text-xs text-white/60 leading-relaxed"><strong className="text-white uppercase block mb-1">Bidding</strong>Predict how many tricks your team can win. Your partner's bid is added to yours.</p></li>
+                <li className="flex gap-3"><span className="text-yellow-500">●</span><p className="text-xs text-white/60 leading-relaxed"><strong className="text-white uppercase block mb-1">Spades are Trump</strong>Spades can beat any other suit. They are always the highest priority cards.</p></li>
+                <li className="flex gap-3"><span className="text-yellow-500">●</span><p className="text-xs text-white/60 leading-relaxed"><strong className="text-white uppercase block mb-1">Nil Bid</strong>Bid 0 for a 100 point bonus if you win NO tricks. It's high risk, high reward!</p></li>
+              </>
+            )}
+          </ul>
+        </section>
       </div>
     </div>
   );
