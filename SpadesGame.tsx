@@ -73,6 +73,17 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     setDragInfo(null);
   };
 
+  const isCardPlayable = useCallback((card: Card): boolean => {
+    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0) return true;
+    const hand = gameState.players[0].hand;
+    const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
+    if (gameState.leadSuit && hasLeadSuit) return card.suit === gameState.leadSuit;
+    if (!gameState.leadSuit && card.suit === 'SPADES' && !gameState.spadesBroken) {
+        return hand.every(c => c.suit === 'SPADES');
+    }
+    return true;
+  }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.spadesBroken]);
+
   const startRound = useCallback(() => {
     const deck = shuffle(createDeck(gameState.settings));
     const players = gameState.players.map((p, i) => ({
@@ -221,31 +232,44 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
 
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
-    const hand = gameState.players[0].hand;
-    const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
-    if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) { setMessage(`Must follow ${gameState.leadSuit}`); return; }
-    if (!gameState.leadSuit && card.suit === 'SPADES' && !gameState.spadesBroken && !hand.every(c => c.suit === 'SPADES')) { setMessage("Spades not broken"); return; }
+    if (!isCardPlayable(card)) {
+        const hand = gameState.players[0].hand;
+        const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
+        if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) setMessage(`Must follow ${gameState.leadSuit}`);
+        else if (!gameState.leadSuit && card.suit === 'SPADES' && !gameState.spadesBroken) setMessage("Spades not broken");
+        return;
+    }
     playCard(0, card.id);
   };
 
   const CARD_WIDTH = 88;
   const SIDE_MARGIN = 16; 
 
-  const handSpacing = useMemo(() => {
-    const count = gameState.players[0].hand.length;
-    if (count <= 1) return 0;
-    const availableWidth = window.innerWidth - (SIDE_MARGIN * 2);
-    const idealSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
-    // Expand minimum compression to allow hand to fit safely on ultra-small screens
-    return Math.max(18, Math.min(45, idealSpacing));
-  }, [gameState.players[0].hand.length]);
+  const handLayout = useMemo(() => {
+    const hand = gameState.players[0].hand;
+    const count = hand.length;
+    if (count === 0) return [];
+    
+    const containerWidth = window.innerWidth - (SIDE_MARGIN * 2);
+    const isPlayerTurn = gameState.phase === 'PLAYING' && gameState.turnIndex === 0;
 
-  const startX = useMemo(() => {
-    const count = gameState.players[0].hand.length;
-    const totalHandWidth = ((count - 1) * handSpacing) + CARD_WIDTH;
-    // CRITICAL: Ensure startX is never negative, pushing the leftmost card off-screen
-    return Math.max(SIDE_MARGIN, (window.innerWidth - totalHandWidth) / 2);
-  }, [gameState.players[0].hand.length, handSpacing]);
+    const weights = hand.map(card => {
+        if (!isPlayerTurn) return 1.0;
+        return isCardPlayable(card) ? 1.4 : 0.6;
+    });
+
+    const sumWeights = weights.reduce((s, w) => s + w, 0);
+    const availableGapWidth = Math.max(0, containerWidth - CARD_WIDTH);
+    const gapPerWeight = count > 1 ? availableGapWidth / sumWeights : 0;
+    
+    let currentX = (containerWidth - (sumWeights * gapPerWeight + CARD_WIDTH)) / 2 + SIDE_MARGIN;
+
+    return hand.map((card, idx) => {
+        const x = currentX;
+        currentX += weights[idx] * gapPerWeight;
+        return { card, x, isPlayable: isCardPlayable(card) };
+    });
+  }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, isCardPlayable]);
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
@@ -337,8 +361,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       {/* HAND AREA */}
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
-           {gameState.players[0].hand.map((card, idx, arr) => {
-             const tx = (idx * handSpacing) + startX;
+           {handLayout.map((item, idx, arr) => {
+             const { card, x: tx, isPlayable } = item;
              const centerIdx = (arr.length - 1) / 2;
              const diffFromCenter = idx - centerIdx;
              
@@ -347,6 +371,8 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
+             const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
+
              let finalTx = tx;
              let finalTy = ty; 
              let finalRot = rot;
@@ -354,9 +380,19 @@ export function SpadesGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging ? 'z-[500]' : ''}`}
-                  style={{ transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : 1})`, zIndex: isDragging ? 500 : finalZIndex, animationDelay: `${idx * 0.015}s` }}
+                  style={{ 
+                    transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : (isDimmed ? 0.95 : 1)})`, 
+                    zIndex: isDragging ? 500 : finalZIndex, 
+                    animationDelay: `${idx * 0.015}s` 
+                  }}
                 >
-                  <CardView card={card} size="lg" highlighted={isDragging && Math.abs(dragOffset) >= 50} hint={hintCardId === card.id} />
+                  <CardView 
+                    card={card} 
+                    size="lg" 
+                    highlighted={isDragging && Math.abs(dragOffset) >= 50} 
+                    hint={hintCardId === card.id} 
+                    inactive={isDimmed}
+                  />
                 </div>
              );
            })}

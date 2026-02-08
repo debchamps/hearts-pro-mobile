@@ -54,7 +54,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   }, [message]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientX; // Fixed potentially wrong property
     setDragInfo({ id, startY: clientY, currentY: clientY });
   };
 
@@ -74,6 +74,20 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     }
     setDragInfo(null);
   };
+
+  const isCardPlayable = useCallback((card: Card): boolean => {
+    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0) return true;
+    const hand = gameState.players[0].hand;
+    const isFirstTrick = gameState.players.reduce((s, p) => s + p.hand.length, 0) === 52;
+    const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
+
+    if (isFirstTrick && !gameState.leadSuit) return card.id === '2-CLUBS';
+    if (gameState.leadSuit && hasLeadSuit) return card.suit === gameState.leadSuit;
+    if (!gameState.leadSuit && card.suit === 'HEARTS' && !gameState.heartsBroken) {
+      return hand.every(c => c.suit === 'HEARTS');
+    }
+    return true;
+  }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.heartsBroken]);
 
   const startRound = useCallback(() => {
     const deck = shuffle(createDeck(gameState.settings));
@@ -260,12 +274,15 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     }
     if (gameState.phase === 'PLAYING') {
       if (gameState.turnIndex !== 0) return;
-      const hand = gameState.players[0].hand;
-      const isFirstTrick = gameState.players.reduce((s,p)=>s+p.hand.length,0) === 52;
-      const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
-      if (isFirstTrick && !gameState.leadSuit && card.id !== '2-CLUBS') { setMessage("Lead 2 of Clubs"); return; }
-      if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) { setMessage(`Must follow ${gameState.leadSuit}`); return; }
-      if (!gameState.leadSuit && card.suit === 'HEARTS' && !gameState.heartsBroken && !hand.every(c => c.suit === 'HEARTS')) { setMessage("Hearts not broken"); return; }
+      if (!isCardPlayable(card)) {
+        const hand = gameState.players[0].hand;
+        const isFirstTrick = gameState.players.reduce((s, p) => s + p.hand.length, 0) === 52;
+        const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
+        if (isFirstTrick && !gameState.leadSuit && card.id !== '2-CLUBS') setMessage("Lead 2 of Clubs");
+        else if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) setMessage(`Must follow ${gameState.leadSuit}`);
+        else if (!gameState.leadSuit && card.suit === 'HEARTS' && !gameState.heartsBroken) setMessage("Hearts not broken");
+        return;
+      }
       playCard(0, card.id);
     }
   };
@@ -273,21 +290,35 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   const CARD_WIDTH = 88;
   const SIDE_MARGIN = 16; 
 
-  const handSpacing = useMemo(() => {
-    const count = gameState.players[0].hand.length;
-    if (count <= 1) return 0;
-    const availableWidth = window.innerWidth - (SIDE_MARGIN * 2);
-    const idealSpacing = (availableWidth - CARD_WIDTH) / (count - 1);
-    // Expand minimum compression to allow hand to fit safely on ultra-small screens
-    return Math.max(18, Math.min(45, idealSpacing));
-  }, [gameState.players[0].hand.length]);
+  const handLayout = useMemo(() => {
+    const hand = gameState.players[0].hand;
+    const count = hand.length;
+    if (count === 0) return [];
+    
+    const containerWidth = window.innerWidth - (SIDE_MARGIN * 2);
+    const isPlayerTurn = gameState.phase === 'PLAYING' && gameState.turnIndex === 0;
 
-  const startX = useMemo(() => {
-    const count = gameState.players[0].hand.length;
-    const totalHandWidth = ((count - 1) * handSpacing) + CARD_WIDTH;
-    // CRITICAL: Ensure startX is never negative, pushing the leftmost card off-screen
-    return Math.max(SIDE_MARGIN, (window.innerWidth - totalHandWidth) / 2);
-  }, [gameState.players[0].hand.length, handSpacing]);
+    // Use weighted logic if it's the player's turn to play
+    const weights = hand.map(card => {
+        if (!isPlayerTurn) return 1.0;
+        return isCardPlayable(card) ? 1.4 : 0.6;
+    });
+
+    const sumWeights = weights.reduce((s, w) => s + w, 0);
+    const availableGapWidth = Math.max(0, containerWidth - CARD_WIDTH);
+    
+    // Each 'weight unit' translates to this many pixels of gap
+    const gapPerWeight = count > 1 ? availableGapWidth / sumWeights : 0;
+    
+    let currentX = (containerWidth - (sumWeights * gapPerWeight + CARD_WIDTH)) / 2 + SIDE_MARGIN;
+
+    return hand.map((card, idx) => {
+        const x = currentX;
+        // Increment for next card based on current card's weight
+        currentX += weights[idx] * gapPerWeight;
+        return { card, x, isPlayable: isCardPlayable(card) };
+    });
+  }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, isCardPlayable]);
 
   const SLOT_WIDTH = 88;
   const SLOT_HEIGHT = 119;
@@ -383,8 +414,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       {/* HAND AREA */}
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
-           {gameState.players[0].hand.map((card, idx, arr) => {
-             const tx = (idx * handSpacing) + startX;
+           {handLayout.map((item, idx, arr) => {
+             const { card, x: tx, isPlayable } = item;
              const centerIdx = (arr.length - 1) / 2;
              const diffFromCenter = idx - centerIdx;
              
@@ -404,18 +435,30 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              if (isSelectedForPass) {
                 const centerOfScreen = window.innerWidth / 2;
                 const slotX = centerOfScreen + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
-                finalTx = slotX - startX;
+                finalTx = slotX; // Absolute X coordinate in this layout context
                 finalTy = -200; 
                 finalRot = 0;
                 finalZIndex = 500;
              }
 
+             const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
+
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[500]' : ''}`}
-                  style={{ transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : (isSelectedForPass ? 1.0 : 1)})`, zIndex: isDragging ? 600 : finalZIndex, animationDelay: `${idx * 0.015}s` }}
+                  style={{ 
+                    transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : (isSelectedForPass ? 1.0 : (isDimmed ? 0.95 : 1))})`, 
+                    zIndex: isDragging ? 600 : finalZIndex, 
+                    animationDelay: `${idx * 0.015}s` 
+                  }}
                 >
-                  <CardView card={card} size="lg" highlighted={isSelectedForPass || (isDragging && Math.abs(dragOffset) >= 50)} hint={hintCardId === card.id} />
+                  <CardView 
+                    card={card} 
+                    size="lg" 
+                    highlighted={isSelectedForPass || (isDragging && Math.abs(dragOffset) >= 50)} 
+                    hint={hintCardId === card.id}
+                    inactive={isDimmed}
+                  />
                   {isSelectedForPass && (
                      <div className="absolute -top-1.5 -right-1.5 w-6 h-6 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-black shadow-lg animate-bounce">
                         {passingIndex + 1}
