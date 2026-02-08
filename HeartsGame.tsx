@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameState, Card, GamePhase, GameSettings, Player, Suit, HistoryItem } from './types';
-import { createDeck, shuffle } from './constants';
+import { createDeck, shuffle, createDeck as generateDeck } from './constants';
 import { getBestMove } from './services/heartsAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
+import { persistenceService } from './services/persistence';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -18,8 +19,8 @@ const playSound = (url: string, volume = 0.4) => {
   } catch (e) {}
 };
 
-export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPlayers: Player[], onExit: () => void, soundEnabled: boolean }) {
-  const [gameState, setGameState] = useState<GameState>({
+export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean }) {
+  const [gameState, setGameState] = useState<GameState>(initialState || {
     gameType: 'HEARTS',
     players: initialPlayers.map(p => ({...p, score: 0, currentRoundScore: 0, tricksWon: 0})),
     dealerIndex: 0,
@@ -45,7 +46,15 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
-  // Auto-clear message after 2 seconds
+  // Auto-save game state
+  useEffect(() => {
+    if (gameState.phase !== 'GAME_OVER') {
+      persistenceService.saveGame('HEARTS', gameState);
+    } else {
+      persistenceService.clearGame();
+    }
+  }, [gameState]);
+
   useEffect(() => {
     if (message) {
       const timer = setTimeout(() => setMessage(""), 2000);
@@ -54,13 +63,13 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   }, [message]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientX; // Fixed potentially wrong property
+    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo({ id, startY: clientY, currentY: clientY });
   };
 
   const onDragMove = (e: React.MouseEvent | React.TouchEvent) => {
     if (!dragInfo) return;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo(prev => prev ? { ...prev, currentY: clientY } : null);
   };
 
@@ -76,7 +85,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   };
 
   const isCardPlayable = useCallback((card: Card): boolean => {
-    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0) return true;
+    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0 || gameState.currentTrick.length >= 4 || clearingTrick) return true;
+    
     const hand = gameState.players[0].hand;
     const isFirstTrick = gameState.players.reduce((s, p) => s + p.hand.length, 0) === 52;
     const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
@@ -87,7 +97,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
       return hand.every(c => c.suit === 'HEARTS');
     }
     return true;
-  }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.heartsBroken]);
+  }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.heartsBroken, gameState.currentTrick.length, clearingTrick]);
 
   const startRound = useCallback(() => {
     const deck = shuffle(createDeck(gameState.settings));
@@ -130,6 +140,7 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
   }, [gameState.players, gameState.settings, gameState.roundNumber]);
 
   useEffect(() => {
+    // Only start round automatically if we are in DEALING phase (new game or new round)
     if (gameState.phase === 'DEALING') {
       const timer = setTimeout(startRound, 600);
       return () => clearTimeout(timer);
@@ -296,9 +307,8 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
     if (count === 0) return [];
     
     const containerWidth = window.innerWidth - (SIDE_MARGIN * 2);
-    const isPlayerTurn = gameState.phase === 'PLAYING' && gameState.turnIndex === 0;
+    const isPlayerTurn = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && gameState.currentTrick.length < 4 && !clearingTrick;
 
-    // Use weighted logic if it's the player's turn to play
     const weights = hand.map(card => {
         if (!isPlayerTurn) return 1.0;
         return isCardPlayable(card) ? 1.4 : 0.6;
@@ -306,19 +316,16 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
 
     const sumWeights = weights.reduce((s, w) => s + w, 0);
     const availableGapWidth = Math.max(0, containerWidth - CARD_WIDTH);
-    
-    // Each 'weight unit' translates to this many pixels of gap
     const gapPerWeight = count > 1 ? availableGapWidth / sumWeights : 0;
     
     let currentX = (containerWidth - (sumWeights * gapPerWeight + CARD_WIDTH)) / 2 + SIDE_MARGIN;
 
     return hand.map((card, idx) => {
         const x = currentX;
-        // Increment for next card based on current card's weight
         currentX += weights[idx] * gapPerWeight;
         return { card, x, isPlayable: isCardPlayable(card) };
     });
-  }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, isCardPlayable]);
+  }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, gameState.currentTrick.length, clearingTrick, isCardPlayable]);
 
   const SLOT_WIDTH = 88;
   const SLOT_HEIGHT = 119;
@@ -339,7 +346,6 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
       </div>
 
-      {/* MESSAGE OVERLAY */}
       <div className="absolute top-[12%] left-1/2 -translate-x-1/2 z-[100] w-full flex justify-center pointer-events-none px-6">
         {message && (
           <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">
@@ -348,16 +354,11 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         )}
       </div>
 
-      {/* PLAY AREA */}
       <div className="h-[70%] relative w-full">
         <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
-
-        {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 text-[12px] font-black uppercase tracking-[0.3em] text-yellow-400 drop-shadow-lg z-20 whitespace-nowrap">Your Turn</div>
-        )}
 
         {gameState.phase === 'PASSING' && (
           <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 flex items-center justify-center gap-[12px] z-[10] w-full">
@@ -369,7 +370,6 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           </div>
         )}
 
-        {/* Trick Area */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const spread = 45; 
@@ -378,7 +378,6 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
-             
              const startPos = [
                 { x: 0, y: 350 }, { x: 380, y: 0 }, { x: 0, y: -350 }, { x: -380, y: 0 }
              ][t.playerId];
@@ -401,7 +400,6 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
           })}
         </div>
 
-        {/* Action Buttons Area */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full flex flex-col items-center z-50 px-10 text-center pointer-events-none">
            {gameState.phase === 'PASSING' && gameState.passingCards.length === 3 && (
              <button onClick={handleConfirmPass} className="mt-6 px-10 py-4 bg-green-600 rounded-full font-black text-xl text-white uppercase shadow-2xl animate-bounce border-b-4 border-green-800 pointer-events-auto">
@@ -411,38 +409,31 @@ export function HeartsGame({ initialPlayers, onExit, soundEnabled }: { initialPl
         </div>
       </div>
 
-      {/* HAND AREA */}
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black/95 via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {handLayout.map((item, idx, arr) => {
              const { card, x: tx, isPlayable } = item;
              const centerIdx = (arr.length - 1) / 2;
              const diffFromCenter = idx - centerIdx;
-             
              const rot = diffFromCenter * 1.5; 
              const ty = Math.pow(diffFromCenter, 2) * 0.4; 
-             
              const isDragging = dragInfo?.id === card.id;
              const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const passingIndex = gameState.passingCards.indexOf(card.id);
              const isSelectedForPass = passingIndex !== -1;
-
              let finalTx = tx;
              let finalTy = ty; 
              let finalRot = rot;
              let finalZIndex = 100 + idx;
-
              if (isSelectedForPass) {
                 const centerOfScreen = window.innerWidth / 2;
                 const slotX = centerOfScreen + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
-                finalTx = slotX; // Absolute X coordinate in this layout context
+                finalTx = slotX;
                 finalTy = -200; 
                 finalRot = 0;
                 finalZIndex = 500;
              }
-
              const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
-
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[500]' : ''}`}

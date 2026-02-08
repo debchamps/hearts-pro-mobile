@@ -43,6 +43,26 @@ export interface HistoryItem {
   leadSuit: Suit | null;
 }
 
+export interface SpadesRoundSummary {
+  roundNumber: number;
+  team0: {
+    bid: number;
+    tricks: number;
+    scoreChange: number;
+    bags: number;
+    nilResults: { playerId: number; success: boolean }[];
+    bagPenalty: boolean;
+  };
+  team1: {
+    bid: number;
+    tricks: number;
+    scoreChange: number;
+    bags: number;
+    nilResults: { playerId: number; success: boolean }[];
+    bagPenalty: boolean;
+  };
+}
+
 export type GamePhase = 'DEALING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'ROUND_END' | 'GAME_OVER';
 export type ScreenState = 'HOME' | 'MENU' | 'GAME' | 'SETTINGS';
 
@@ -62,4 +82,5 @@ export interface GameState {
   teamScores: [number, number]; // [Team Blue, Team Red]
   teamBags: [number, number]; // [Team Blue, Team Red]
   trickHistory: HistoryItem[];
+  spadesHistory?: SpadesRoundSummary[];
 }

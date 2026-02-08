@@ -1,6 +1,6 @@
 
 import React, { memo } from 'react';
-import { Card, GamePhase, GameType, Player, HistoryItem } from './types';
+import { Card, GamePhase, GameType, Player, HistoryItem, SpadesRoundSummary } from './types';
 import { SUIT_COLORS, SUIT_SYMBOLS } from './constants';
 
 export const Overlay = memo(({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) => (
@@ -24,25 +24,17 @@ export const CardView = memo(({ card, size = 'md', inactive = false, highlighted
   const showRing = highlighted || hint;
   const ringColor = hint ? 'ring-cyan-400 shadow-[0_0_35px_rgba(34,211,238,0.9)]' : 'ring-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)]';
 
-  // Corner spacing adjustments
   const cornerTop = size === 'sm' ? 'top-0.5' : 'top-1';
   const cornerLeft = size === 'sm' ? 'left-0.5' : 'left-1';
 
   return (
     <div className={`${dims} bg-white rounded-lg card-shadow relative overflow-hidden transition-all duration-300 ${SUIT_COLORS[card.suit] || 'text-black'} ${showRing ? `ring-4 ${ringColor}` : ''} ${hint ? 'animate-pulse' : ''} ${inactive ? 'grayscale brightness-[0.7] contrast-[0.9]' : 'opacity-100'}`}>
-      {/* Top Left Corner */}
       <div className={`absolute ${cornerTop} ${cornerLeft} flex flex-col items-center leading-none z-10`}>
         <div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div>
         <div className={`${cornerSymStyle} -mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
       </div>
-      
-      {/* Center Watermark */}
       <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.08] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>{SUIT_SYMBOLS[card.suit]}</div>
-      
-      {/* Bottom Right Corner Symbol */}
       <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>{SUIT_SYMBOLS[card.suit]}</div>
-      
-      {/* Inactive Overlay - Solid dark tint instead of transparency */}
       {inactive && <div className="absolute inset-0 bg-black/40 z-20 pointer-events-none" />}
     </div>
   );
@@ -71,7 +63,7 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
         
         {isSpades && player.bid !== undefined && (
            <div className={`absolute -right-3 -bottom-3 ${badgeColor} text-white w-10 h-10 rounded-full flex flex-col items-center justify-center border-2 border-white shadow-2xl animate-deal transform rotate-12 z-30`}>
-              <span className="text-[7px] font-black uppercase leading-none opacity-60">BID</span>
+              <span className="text-[7px] font-black uppercase leading-none opacity-60">{player.bid === 0 ? 'NIL' : 'BID'}</span>
               <span className="text-lg font-black leading-none">{player.bid}</span>
            </div>
         )}
@@ -101,7 +93,7 @@ export const HistoryModal = memo(({ history, players, onClose }: { history: Hist
             <h2 className="text-2xl font-black italic text-yellow-500 uppercase">Trick History</h2>
             <p className="text-[8px] text-white/30 uppercase tracking-[0.3em]">Round Analysis</p>
           </div>
-          <button onClick={onClose} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">✕</button>
+          <button onClick={onClose} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl active:scale-90 transition-transform">✕</button>
         </div>
         
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -141,6 +133,97 @@ export const HistoryModal = memo(({ history, players, onClose }: { history: Hist
   );
 });
 
+export const ScorecardModal = memo(({ history, currentScores, currentBags, onClose }: { history: SpadesRoundSummary[], currentScores: [number, number], currentBags: [number, number], onClose: () => void }) => {
+  return (
+    <div className="absolute inset-0 z-[200] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4 animate-fadeIn">
+      <div className="bg-neutral-900 border border-white/20 rounded-[2.5rem] shadow-2xl flex flex-col w-full max-w-xl max-h-[85vh] animate-play overflow-hidden">
+        <div className="p-6 bg-black/40 border-b border-white/10 flex justify-between items-center">
+          <div>
+            <h2 className="text-3xl font-black italic text-yellow-500 uppercase tracking-tighter">Scorecard</h2>
+            <p className="text-[8px] text-white/30 uppercase tracking-[0.4em]">Team Pro Performance</p>
+          </div>
+          <button onClick={onClose} className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-xl transition-all active:scale-90">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="text-[9px] font-black text-white/40 uppercase tracking-widest border-b border-white/5">
+                <th className="py-4 px-2 w-16">Round</th>
+                <th className="py-4 px-2 text-blue-500">Team Blue</th>
+                <th className="py-4 px-2 text-rose-500">Team Red</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {history.map((round) => (
+                <tr key={round.roundNumber} className="group hover:bg-white/5 transition-colors">
+                  <td className="py-4 px-2 font-black italic text-white/30 text-lg">#{round.roundNumber}</td>
+                  <td className="py-4 px-2">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl font-black text-white">{round.team0.scoreChange > 0 ? `+${round.team0.scoreChange}` : round.team0.scoreChange}</span>
+                        <span className="text-[10px] font-black text-white/20 uppercase tracking-tighter">({round.team0.tricks}/{round.team0.bid})</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {round.team0.bagPenalty && <span className="bg-red-500/20 text-red-500 text-[8px] font-black px-1.5 py-0.5 rounded border border-red-500/30 uppercase">Bag Penalty!</span>}
+                        {round.team0.nilResults.map((nr, i) => (
+                          <span key={i} className={`${nr.success ? 'bg-green-500/20 text-green-500 border-green-500/30' : 'bg-red-500/20 text-red-500 border-red-500/30'} text-[8px] font-black px-1.5 py-0.5 rounded border uppercase`}>
+                            {nr.success ? 'NIL Success' : 'NIL FAILED!'}
+                          </span>
+                        ))}
+                        <span className="text-[8px] font-black text-blue-400 opacity-60 uppercase">Bags: +{round.team0.bags}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-4 px-2">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl font-black text-white">{round.team1.scoreChange > 0 ? `+${round.team1.scoreChange}` : round.team1.scoreChange}</span>
+                        <span className="text-[10px] font-black text-white/20 uppercase tracking-tighter">({round.team1.tricks}/{round.team1.bid})</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {round.team1.bagPenalty && <span className="bg-red-500/20 text-red-500 text-[8px] font-black px-1.5 py-0.5 rounded border border-red-500/30 uppercase">Bag Penalty!</span>}
+                        {round.team1.nilResults.map((nr, i) => (
+                          <span key={i} className={`${nr.success ? 'bg-green-500/20 text-green-500 border-green-500/30' : 'bg-red-500/20 text-red-500 border-red-500/30'} text-[8px] font-black px-1.5 py-0.5 rounded border uppercase`}>
+                            {nr.success ? 'NIL Success' : 'NIL FAILED!'}
+                          </span>
+                        ))}
+                        <span className="text-[8px] font-black text-rose-400 opacity-60 uppercase">Bags: +{round.team1.bags}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {history.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="py-20 text-center opacity-20 font-black uppercase tracking-[0.2em] text-xs">No rounds completed</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="p-6 bg-black/60 border-t border-white/10 grid grid-cols-2 gap-6">
+          <div className="flex flex-col items-start">
+             <span className="text-[9px] font-black text-blue-500 uppercase tracking-[0.2em] mb-1">Total Blue</span>
+             <div className="flex items-baseline gap-2">
+               <span className="text-3xl font-black italic text-white">{currentScores[0]}</span>
+               <span className="text-[10px] font-black text-white/30 uppercase tracking-tighter">{currentBags[0]} Bags</span>
+             </div>
+          </div>
+          <div className="flex flex-col items-end">
+             <span className="text-[9px] font-black text-rose-500 uppercase tracking-[0.2em] mb-1">Total Red</span>
+             <div className="flex items-baseline gap-2">
+               <span className="text-3xl font-black italic text-white">{currentScores[1]}</span>
+               <span className="text-[10px] font-black text-white/30 uppercase tracking-tighter">{currentBags[1]} Bags</span>
+             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const HowToPlayModal = memo(({ gameType, onClose }: { gameType: GameType, onClose: () => void }) => {
   const isHearts = gameType === 'HEARTS';
   
@@ -152,7 +235,7 @@ export const HowToPlayModal = memo(({ gameType, onClose }: { gameType: GameType,
             <h2 className="text-2xl font-black italic text-yellow-500 uppercase">How to Play</h2>
             <p className="text-[8px] text-white/30 uppercase tracking-[0.3em]">{gameType} Guide</p>
           </div>
-          <button onClick={onClose} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">✕</button>
+          <button onClick={onClose} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl active:scale-90 transition-transform">✕</button>
         </div>
         
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
