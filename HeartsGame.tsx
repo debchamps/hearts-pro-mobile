@@ -5,6 +5,7 @@ import { createDeck, shuffle } from './constants';
 import { getBestMove } from './services/heartsAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
+import { leaderboardService } from './services/leaderboardService';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -45,11 +46,15 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+  const [currentRank, setCurrentRank] = useState<number | null>(null);
   
   const passingDialogRef = useRef<HTMLDivElement>(null);
   const handContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-save game state
+  useEffect(() => {
+    leaderboardService.getRank('HEARTS').then(setCurrentRank);
+  }, []);
+
   useEffect(() => {
     if (gameState.phase !== 'GAME_OVER') {
       persistenceService.saveGame('HEARTS', gameState);
@@ -261,6 +266,16 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
               if (prev.settings.shootTheMoon) newPlayers.forEach(p => { if (p.currentRoundScore === 26) shooterId = p.id; });
               const finalPlayers = newPlayers.map(p => ({ ...p, score: p.score + (shooterId !== -1 ? (p.id === shooterId ? 0 : 26) : p.currentRoundScore), currentRoundScore: 0 }));
               const over = finalPlayers.some(p => p.score >= prev.settings.targetScore);
+              
+              if (over) {
+                // Submit match rank bonuses to leaderboard
+                const sorted = [...finalPlayers].sort((a,b) => a.score - b.score);
+                const userRank = sorted.findIndex(p => p.id === 0);
+                const bonuses = [100, 50, 20, 0];
+                const bonus = bonuses[userRank] || 0;
+                leaderboardService.submitGameScore('HEARTS', bonus);
+              }
+
               return { ...prev, players: finalPlayers, phase: over ? 'GAME_OVER' : 'ROUND_END', currentTrick: [], leadSuit: null, dealerIndex: (prev.dealerIndex + 1) % 4, trickHistory: newHistory };
             }
             return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId, trickHistory: newHistory };
@@ -344,6 +359,12 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <div className="flex gap-2">
           <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
+          <button onClick={() => leaderboardService.openLeaderboard('HEARTS')} className="bg-white/10 rounded-xl px-2 h-10 flex items-center gap-1.5 shadow-lg border border-white/5 active:scale-95 transition-all">
+            <span className="text-xl">🏆</span>
+            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-tighter">
+              {currentRank ? `#${currentRank}` : 'RANK'}
+            </span>
+          </button>
           <button onClick={() => setShowHowToPlay(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">?</button>
         </div>
         <div className="text-center">
@@ -405,15 +426,14 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
           </div>
         )}
 
+        {/* TRICK AREA: Staggered Pinwheel Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const spreadX = 80; 
-             const spreadY = 60;
              const offsets = [
-               { x: 0, y: spreadY, rot: '0deg' },      // P0 (Bottom)
-               { x: spreadX, y: 0, rot: '8deg' },      // P1 (Right)
-               { x: 0, y: -spreadY, rot: '-4deg' },    // P2 (Top)
-               { x: -spreadX, y: 0, rot: '-8deg' }     // P3 (Left)
+               { x: -22, y: 50, rot: '0deg' },      // P0 (Bottom)
+               { x: 65,  y: 18, rot: '8deg' },      // P1 (Right)
+               { x: 22,  y: -50, rot: '-4deg' },    // P2 (Top)
+               { x: -65, y: -18, rot: '-8deg' }     // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
@@ -462,18 +482,12 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
              if (isSelectedForPass && passingDialogRef.current && handContainerRef.current) {
                 const dialogRect = passingDialogRef.current.getBoundingClientRect();
                 const handRect = handContainerRef.current.getBoundingClientRect();
-                
-                // Calculate the exact center of the 3-slot group within the dialog
                 const totalSlotsWidth = (3 * SLOT_WIDTH) + (2 * SLOT_GAP);
                 const firstSlotLeft = dialogRect.left + (dialogRect.width - totalSlotsWidth) / 2;
-                
                 const targetX = firstSlotLeft + (passingIndex * (SLOT_WIDTH + SLOT_GAP));
                 const targetY = dialogRect.top + (dialogRect.height - SLOT_HEIGHT) / 2;
-                
-                // Offset by hand container position to get relative translate coordinates
                 finalTx = targetX - handRect.left;
                 finalTy = targetY - handRect.top;
-                
                 finalRot = 0;
                 finalZIndex = 500;
                 finalScale = 1.0; 

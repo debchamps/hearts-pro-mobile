@@ -5,6 +5,7 @@ import { createDeck, shuffle } from './constants';
 import { getCallbreakBid, getCallbreakMove } from './services/callbreakAi';
 import { Avatar, CardView, Overlay, HistoryModal, CallbreakScorecardModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
+import { leaderboardService } from './services/leaderboardService';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -28,7 +29,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
     leadSuit: null,
     currentTrick: [],
     heartsBroken: false,
-    spadesBroken: true, // In Callbreak, spades are always broken
+    spadesBroken: true, 
     phase: 'DEALING',
     roundNumber: 1,
     passingCards: [],
@@ -45,6 +46,11 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
   const [showHistory, setShowHistory] = useState(false);
   const [showScorecard, setShowScorecard] = useState(false);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+  const [currentRank, setCurrentRank] = useState<number | null>(null);
+
+  useEffect(() => {
+    leaderboardService.getRank('CALLBREAK').then(setCurrentRank);
+  }, []);
 
   useEffect(() => {
     if (gameState.phase !== 'GAME_OVER') {
@@ -79,13 +85,10 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
     const hand = gameState.players[0].hand;
     const leadSuit = gameState.leadSuit;
     if (!leadSuit) return true;
-
     const hasLeadSuit = hand.some(c => c.suit === leadSuit);
     if (hasLeadSuit) return card.suit === leadSuit;
-
     const hasSpades = hand.some(c => c.suit === 'SPADES');
     if (hasSpades) return card.suit === 'SPADES';
-
     return true;
   }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.currentTrick.length, clearingTrick]);
 
@@ -210,8 +213,23 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
                 const scoreChange = success ? (p.bid || 0) + ((p.tricksWon || 0) - (p.bid || 0)) / 10 : -(p.bid || 0);
                 return { playerId: p.id, bid: p.bid || 0, tricks: p.tricksWon || 0, scoreChange, totalAfterRound: p.score + scoreChange };
               });
+
+              // Scoring Logic: (scoreChange * 10) after each round
+              const userRoundData = roundScores.find(s => s.playerId === 0);
+              let submissionScore = (userRoundData?.scoreChange || 0) * 10;
+              
               const summary: CallbreakRoundSummary = { roundNumber: prev.roundNumber, scores: roundScores };
               const over = prev.roundNumber >= 5;
+
+              if (over) {
+                // Scoring Logic: Match bonus based on rank
+                const finalSorted = [...roundScores].sort((a,b) => b.totalAfterRound - a.totalAfterRound);
+                const userMatchRank = finalSorted.findIndex(s => s.playerId === 0);
+                const bonuses = [100, 50, 20, 0];
+                submissionScore += bonuses[userMatchRank] || 0;
+              }
+              leaderboardService.submitGameScore('CALLBREAK', submissionScore);
+
               return { 
                 ...prev, 
                 players: newPlayers.map((p, i) => ({ ...p, score: roundScores[i].totalAfterRound })), 
@@ -252,22 +270,14 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
         }
     }
 
-    // Check mandatory overtrump if enabled
     if (gameState.settings.mandatoryOvertrump && gameState.currentTrick.length > 0) {
         let currentWinningSpadeVal = -1;
         gameState.currentTrick.forEach(t => { if (t.card.suit === 'SPADES' && t.card.value > currentWinningSpadeVal) currentWinningSpadeVal = t.card.value; });
-        
         if (currentWinningSpadeVal > -1) {
             const betterSpades = hand.filter(c => c.suit === 'SPADES' && c.value > currentWinningSpadeVal);
             const canOvertrump = betterSpades.length > 0;
             const isPlayingSpade = card.suit === 'SPADES';
-            const isFollowingLead = card.suit === leadSuit;
-            
-            // If we are forced to play a spade (void of suit) OR we chose to play a spade to follow a spade lead
-            // and we can beat the current winning spade, we must do so.
             if (isPlayingSpade && canOvertrump && card.value < currentWinningSpadeVal) {
-                // If the lead was spades, then card.suit === leadSuit already.
-                // If lead was not spades, but we are playing a spade (because void), we still must overtrump if possible.
                 setMessage("Mandatory Overtrump: Play a higher Spade!");
                 return;
             }
@@ -296,7 +306,15 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden text-white" onMouseMove={onDragMove} onTouchMove={onDragMove}>
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 border-b border-purple-500/20">
-        <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
+        <div className="flex gap-2">
+            <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
+            <button onClick={() => leaderboardService.openLeaderboard('CALLBREAK')} className="bg-white/10 rounded-xl px-2 h-10 flex items-center gap-1.5 shadow-lg border border-white/5 active:scale-95 transition-all">
+                <span className="text-xl">🏆</span>
+                <span className="text-[9px] font-black text-yellow-500 uppercase tracking-tighter">
+                {currentRank ? `#${currentRank}` : 'RANK'}
+                </span>
+            </button>
+        </div>
         <div className="flex flex-col items-center">
             <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest leading-none">Round</span>
             <span className="text-2xl font-black italic text-yellow-500 leading-tight">{gameState.roundNumber}/5</span>
@@ -317,15 +335,14 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
             return <Avatar key={p.id} player={p} pos={pos} active={gameState.turnIndex === i} isWinner={clearingTrick?.winnerId === i} gameType="CALLBREAK" phase={gameState.phase} />;
         })}
 
+        {/* TRICK AREA: Staggered Pinwheel Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const spreadX = 80; 
-             const spreadY = 60;
              const offsets = [
-               { x: 0, y: spreadY, rot: '0deg' },      // P0 (Bottom)
-               { x: spreadX, y: 0, rot: '8deg' },      // P1 (Right)
-               { x: 0, y: -spreadY, rot: '-4deg' },    // P2 (Top)
-               { x: -spreadX, y: 0, rot: '-8deg' }     // P3 (Left)
+               { x: -22, y: 50, rot: '0deg' },      // P0 (Bottom)
+               { x: 65,  y: 18, rot: '8deg' },      // P1 (Right)
+               { x: 22,  y: -50, rot: '-4deg' },    // P2 (Top)
+               { x: -65, y: -18, rot: '-8deg' }     // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];

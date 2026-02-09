@@ -90,6 +90,11 @@
                 transform: translate3d(0,0,0) scale(1.05); 
             }
         }
+
+        @keyframes float-wiggle {
+            0%, 100% { transform: translateY(0) rotate(-5deg); }
+            50% { transform: translateY(-6px) rotate(4deg); }
+        }
         
         .animate-fadeIn { animation: fadeIn 0.3s ease-out forwards; }
         .animate-deal { 
@@ -103,6 +108,9 @@
         .animate-clear { 
             animation: trick-clear 0.8s cubic-bezier(0.7, 0, 0.3, 1) forwards; 
             will-change: transform, opacity;
+        }
+        .animate-float-wiggle {
+            animation: float-wiggle 3s ease-in-out infinite;
         }
         
         .card-fan-item {

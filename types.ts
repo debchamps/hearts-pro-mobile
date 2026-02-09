@@ -97,3 +97,9 @@ export interface GameState {
   spadesHistory?: SpadesRoundSummary[];
   callbreakHistory?: CallbreakRoundSummary[];
 }
+
+export interface PendingScore {
+  gameType: GameType;
+  score: number;
+  timestamp: number;
+}

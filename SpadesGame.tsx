@@ -5,6 +5,7 @@ import { createDeck, shuffle } from './constants';
 import { getSpadesBid, getSpadesMove } from './services/spadesAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, ScorecardModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
+import { leaderboardService } from './services/leaderboardService';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -47,8 +48,12 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+  const [currentRank, setCurrentRank] = useState<number | null>(null);
 
-  // Auto-save game state
+  useEffect(() => {
+    leaderboardService.getRank('SPADES').then(setCurrentRank);
+  }, []);
+
   useEffect(() => {
     if (gameState.phase !== 'GAME_OVER') {
       persistenceService.saveGame('SPADES', gameState);
@@ -266,6 +271,14 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
               const newTeamScores: [number, number] = [prev.teamScores[0] + r0.scoreChange, prev.teamScores[1] + r1.scoreChange];
               const newTeamBags: [number, number] = [r0.finalBags, r1.finalBags];
               const over = newTeamScores[0] >= 500 || newTeamScores[1] >= 500;
+              
+              // Scoring Logic: Total points won in round + 100 bonus for match win
+              let submissionScore = r0.scoreChange;
+              if (over && newTeamScores[0] >= 500 && newTeamScores[0] > newTeamScores[1]) {
+                submissionScore += 100;
+              }
+              leaderboardService.submitGameScore('SPADES', submissionScore);
+
               return { 
                 ...prev, 
                 players: newPlayers, 
@@ -334,6 +347,12 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <div className="flex gap-2">
           <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
+          <button onClick={() => leaderboardService.openLeaderboard('SPADES')} className="bg-white/10 rounded-xl px-2 h-10 flex items-center gap-1.5 shadow-lg border border-white/5 active:scale-95 transition-all">
+            <span className="text-xl">🏆</span>
+            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-tighter">
+              {currentRank ? `#${currentRank}` : 'RANK'}
+            </span>
+          </button>
           <button onClick={() => setShowHowToPlay(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">?</button>
         </div>
         <div className="flex items-center bg-black/60 rounded-xl overflow-hidden border border-white/10 h-10 w-52 shadow-lg">
@@ -366,15 +385,14 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
         <Avatar player={gameState.players[1]} pos="top-1/2 right-2 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
+        {/* TRICK AREA: Staggered Pinwheel Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const spreadX = 80; 
-             const spreadY = 60;
              const offsets = [
-               { x: 0, y: spreadY, rot: '0deg' },      // P0 (Bottom)
-               { x: spreadX, y: 0, rot: '8deg' },      // P1 (Right)
-               { x: 0, y: -spreadY, rot: '-4deg' },    // P2 (Top)
-               { x: -spreadX, y: 0, rot: '-8deg' }     // P3 (Left)
+               { x: -22, y: 50, rot: '0deg' },      // P0 (Bottom)
+               { x: 65,  y: 18, rot: '8deg' },      // P1 (Right)
+               { x: 22,  y: -50, rot: '-4deg' },    // P2 (Top)
+               { x: -65, y: -18, rot: '-8deg' }     // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
