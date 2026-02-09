@@ -268,7 +268,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
               const over = finalPlayers.some(p => p.score >= prev.settings.targetScore);
               
               if (over) {
-                // Submit match rank bonuses to leaderboard
                 const sorted = [...finalPlayers].sort((a,b) => a.score - b.score);
                 const userRank = sorted.findIndex(p => p.id === 0);
                 const bonuses = [100, 50, 20, 0];
@@ -426,14 +425,14 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
           </div>
         )}
 
-        {/* TRICK AREA: Staggered Pinwheel Formation */}
+        {/* TRICK AREA: Refined Symmetric Cross Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const offsets = [
-               { x: -22, y: 50, rot: '0deg' },      // P0 (Bottom)
-               { x: 65,  y: 18, rot: '8deg' },      // P1 (Right)
-               { x: 22,  y: -50, rot: '-4deg' },    // P2 (Top)
-               { x: -65, y: -18, rot: '-8deg' }     // P3 (Left)
+               { x: 0,   y: 45,  rot: '2deg' },   // P0 (Bottom)
+               { x: 60,  y: 0,   rot: '5deg' },   // P1 (Right)
+               { x: 0,   y: -45, rot: '-3deg' },  // P2 (Top)
+               { x: -60, y: 0,   rot: '-6deg' }   // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];

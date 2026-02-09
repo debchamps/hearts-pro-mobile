@@ -272,7 +272,6 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
               const newTeamBags: [number, number] = [r0.finalBags, r1.finalBags];
               const over = newTeamScores[0] >= 500 || newTeamScores[1] >= 500;
               
-              // Scoring Logic: Total points won in round + 100 bonus for match win
               let submissionScore = r0.scoreChange;
               if (over && newTeamScores[0] >= 500 && newTeamScores[0] > newTeamScores[1]) {
                 submissionScore += 100;
@@ -385,14 +384,14 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
         <Avatar player={gameState.players[1]} pos="top-1/2 right-2 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
 
-        {/* TRICK AREA: Staggered Pinwheel Formation */}
+        {/* TRICK AREA: Refined Symmetric Cross Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const offsets = [
-               { x: -22, y: 50, rot: '0deg' },      // P0 (Bottom)
-               { x: 65,  y: 18, rot: '8deg' },      // P1 (Right)
-               { x: 22,  y: -50, rot: '-4deg' },    // P2 (Top)
-               { x: -65, y: -18, rot: '-8deg' }     // P3 (Left)
+               { x: 0,   y: 45,  rot: '2deg' },   // P0 (Bottom)
+               { x: 60,  y: 0,   rot: '5deg' },   // P1 (Right)
+               { x: 0,   y: -45, rot: '-3deg' },  // P2 (Top)
+               { x: -60, y: 0,   rot: '-6deg' }   // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];

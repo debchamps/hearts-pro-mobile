@@ -214,7 +214,6 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
                 return { playerId: p.id, bid: p.bid || 0, tricks: p.tricksWon || 0, scoreChange, totalAfterRound: p.score + scoreChange };
               });
 
-              // Scoring Logic: (scoreChange * 10) after each round
               const userRoundData = roundScores.find(s => s.playerId === 0);
               let submissionScore = (userRoundData?.scoreChange || 0) * 10;
               
@@ -222,7 +221,6 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
               const over = prev.roundNumber >= 5;
 
               if (over) {
-                // Scoring Logic: Match bonus based on rank
                 const finalSorted = [...roundScores].sort((a,b) => b.totalAfterRound - a.totalAfterRound);
                 const userMatchRank = finalSorted.findIndex(s => s.playerId === 0);
                 const bonuses = [100, 50, 20, 0];
@@ -335,14 +333,14 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
             return <Avatar key={p.id} player={p} pos={pos} active={gameState.turnIndex === i} isWinner={clearingTrick?.winnerId === i} gameType="CALLBREAK" phase={gameState.phase} />;
         })}
 
-        {/* TRICK AREA: Staggered Pinwheel Formation */}
+        {/* TRICK AREA: Refined Symmetric Cross Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
              const offsets = [
-               { x: -22, y: 50, rot: '0deg' },      // P0 (Bottom)
-               { x: 65,  y: 18, rot: '8deg' },      // P1 (Right)
-               { x: 22,  y: -50, rot: '-4deg' },    // P2 (Top)
-               { x: -65, y: -18, rot: '-8deg' }     // P3 (Left)
+               { x: 0,   y: 45,  rot: '2deg' },   // P0 (Bottom)
+               { x: 60,  y: 0,   rot: '5deg' },   // P1 (Right)
+               { x: 0,   y: -45, rot: '-3deg' },  // P2 (Top)
+               { x: -60, y: 0,   rot: '-6deg' }   // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
@@ -376,6 +374,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {handLayout.map((item, idx) => (
+              // Added event 'e' to the onDragStart call to match the function signature.
               <div key={item.card.id} onMouseDown={(e) => onDragStart(e, item.card.id)} onTouchStart={(e) => onDragStart(e, item.card.id)} onMouseUp={() => onDragEnd(item.card)} onTouchEnd={() => onDragEnd(item.card)}
                 className={`absolute card-fan-item animate-deal cursor-grab ${dragInfo?.id === item.card.id ? 'z-[500]' : ''}`}
                 style={{ transform: `translate3d(${item.x}px, ${Math.pow(idx - (handLayout.length-1)/2, 2) * 0.45 + (dragInfo?.id === item.card.id ? dragInfo.currentY - dragInfo.startY : 0)}px, 0) rotate(${(idx - (handLayout.length-1)/2)*1.5}deg) scale(${dragInfo?.id === item.card.id ? 1.15 : (gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !item.isPlayable ? 0.95 : 1)})`, zIndex: 100 + idx }}
