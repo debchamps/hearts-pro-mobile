@@ -47,6 +47,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
   
   const passingDialogRef = useRef<HTMLDivElement>(null);
+  const handContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-save game state
   useEffect(() => {
@@ -361,7 +362,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="h-[70%] relative w-full">
-        {/* DIMMING FILTER: Obscures avatars and central board, but leaves z-40 hand and z-50 header clear */}
         {gameState.phase === 'PASSING' && (
           <div className="absolute inset-0 bg-black/75 z-[8] animate-fadeIn" />
         )}
@@ -371,11 +371,9 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
         <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
         <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
 
-        {/* PASSING DIALOG: High-end solid design */}
         {gameState.phase === 'PASSING' && (
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[60%] z-[20] w-[90%] max-w-sm flex flex-col items-center animate-fadeIn">
             <div className="bg-[#121212] border-2 border-[#d4af37] rounded-[3rem] p-8 shadow-[0_30px_60px_-12px_rgba(0,0,0,0.9)] w-full flex flex-col items-center relative overflow-hidden">
-              {/* Subtle light streak for texture */}
               <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-white/5 to-transparent pointer-events-none" />
               
               <div className="mb-6 text-center relative z-10">
@@ -409,9 +407,13 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const spread = 45; 
+             const spreadX = 80; 
+             const spreadY = 60;
              const offsets = [
-               { x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }
+               { x: 0, y: spreadY, rot: '0deg' },      // P0 (Bottom)
+               { x: spreadX, y: 0, rot: '8deg' },      // P1 (Right)
+               { x: 0, y: -spreadY, rot: '-4deg' },    // P2 (Top)
+               { x: -spreadX, y: 0, rot: '-8deg' }     // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
@@ -438,7 +440,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
         </div>
       </div>
 
-      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black via-black/40 to-transparent overflow-visible">
+      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black via-black/40 to-transparent overflow-visible" ref={handContainerRef}>
         <div className="relative w-full flex-1">
            {handLayout.map((item, idx, arr) => {
              const { card, x: tx, isPlayable } = item;
@@ -455,16 +457,26 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
              let finalTy = ty; 
              let finalRot = rot;
              let finalZIndex = 100 + idx;
+             let finalScale = isDragging ? 1.15 : (isCardPlayable && gameState.phase === 'PLAYING' && gameState.turnIndex === 0 ? 1 : (gameState.phase === 'PLAYING' && gameState.turnIndex === 0 ? 0.95 : 1));
 
-             if (isSelectedForPass && passingDialogRef.current) {
+             if (isSelectedForPass && passingDialogRef.current && handContainerRef.current) {
                 const dialogRect = passingDialogRef.current.getBoundingClientRect();
-                const centerOfDialogX = dialogRect.left + dialogRect.width / 2;
-                const slotX = centerOfDialogX + (passingIndex - 1) * (SLOT_WIDTH + SLOT_GAP) - (SLOT_WIDTH / 2);
+                const handRect = handContainerRef.current.getBoundingClientRect();
                 
-                finalTx = slotX;
-                finalTy = -(window.innerHeight * 0.45); 
+                // Calculate the exact center of the 3-slot group within the dialog
+                const totalSlotsWidth = (3 * SLOT_WIDTH) + (2 * SLOT_GAP);
+                const firstSlotLeft = dialogRect.left + (dialogRect.width - totalSlotsWidth) / 2;
+                
+                const targetX = firstSlotLeft + (passingIndex * (SLOT_WIDTH + SLOT_GAP));
+                const targetY = dialogRect.top + (dialogRect.height - SLOT_HEIGHT) / 2;
+                
+                // Offset by hand container position to get relative translate coordinates
+                finalTx = targetX - handRect.left;
+                finalTy = targetY - handRect.top;
+                
                 finalRot = 0;
                 finalZIndex = 500;
+                finalScale = 1.0; 
              }
 
              const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
@@ -472,7 +484,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[600]' : ''}`}
                   style={{ 
-                    transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : (isSelectedForPass ? 1.0 : (isDimmed ? 0.95 : 1))})`, 
+                    transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${finalScale})`, 
                     zIndex: isDragging ? 700 : finalZIndex, 
                     animationDelay: `${idx * 0.015}s`,
                     pointerEvents: gameState.phase === 'PASSING' || (gameState.phase === 'PLAYING' && gameState.turnIndex === 0) ? 'auto' : 'none'

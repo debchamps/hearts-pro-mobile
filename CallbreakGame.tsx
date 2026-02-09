@@ -319,8 +319,15 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const spread = 45; 
-             const off = [ { x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' } ][t.playerId];
+             const spreadX = 80; 
+             const spreadY = 60;
+             const offsets = [
+               { x: 0, y: spreadY, rot: '0deg' },      // P0 (Bottom)
+               { x: spreadX, y: 0, rot: '8deg' },      // P1 (Right)
+               { x: 0, y: -spreadY, rot: '-4deg' },    // P2 (Top)
+               { x: -spreadX, y: 0, rot: '-8deg' }     // P3 (Left)
+             ];
+             const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
              return (
                <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} style={{ '--play-x': `${off.x}px`, '--play-y': `${off.y}px`, '--play-rot': off.rot, '--start-x': '0px', '--start-y': '0px', '--clear-x': `${winDir.x}px`, '--clear-y': `${winDir.y}px`, zIndex: 10 + idx } as any}>
@@ -331,13 +338,20 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
         </div>
 
         {gameState.phase === 'BIDDING' && gameState.turnIndex === 0 && (
-          <div className="absolute bottom-[25%] left-1/2 -translate-x-1/2 bg-black/90 p-6 rounded-[2.5rem] border border-purple-500/30 backdrop-blur-2xl shadow-2xl z-50 flex flex-col items-center">
-             <h3 className="text-yellow-500 font-black uppercase text-[11px] tracking-widest mb-4">Call Your Bid</h3>
+          <div className="absolute bottom-[10%] left-1/2 -translate-x-1/2 bg-black/85 p-6 rounded-[2.5rem] border border-purple-500/40 backdrop-blur-3xl shadow-2xl z-[200] flex flex-col items-center w-[90%] max-w-xs animate-fadeIn pointer-events-auto">
+             <h3 className="text-yellow-500 font-black uppercase text-[11px] tracking-[0.3em] mb-4 text-center">How many tricks?</h3>
              <div className="grid grid-cols-4 gap-2">
                {[1,2,3,4,5,6,7,8].map(b => (
-                 <button key={b} onClick={() => handleBid(b)} className="w-12 h-12 rounded-xl bg-purple-600/20 hover:bg-purple-600 font-black text-lg transition-all active:scale-90 border border-purple-500/20"> {b} </button>
+                 <button 
+                  key={b} 
+                  onClick={() => handleBid(b)} 
+                  className="w-12 h-12 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-white font-black text-lg transition-all active:scale-90 border border-purple-500/20 flex items-center justify-center"
+                 > 
+                  {b} 
+                 </button>
                ))}
              </div>
+             <p className="mt-4 text-white/30 text-[8px] font-black uppercase tracking-widest">Select target tricks</p>
           </div>
         )}
       </div>

@@ -368,9 +368,13 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const spread = 45; 
+             const spreadX = 80; 
+             const spreadY = 60;
              const offsets = [
-               { x: 0, y: spread, rot: '0deg' }, { x: spread, y: 0, rot: '15deg' }, { x: 0, y: -spread, rot: '-5deg' }, { x: -spread, y: 0, rot: '-15deg' }
+               { x: 0, y: spreadY, rot: '0deg' },      // P0 (Bottom)
+               { x: spreadX, y: 0, rot: '8deg' },      // P1 (Right)
+               { x: 0, y: -spreadY, rot: '-4deg' },    // P2 (Top)
+               { x: -spreadX, y: 0, rot: '-8deg' }     // P3 (Left)
              ];
              const off = offsets[t.playerId];
              const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
