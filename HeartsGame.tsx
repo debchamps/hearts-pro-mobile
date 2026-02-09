@@ -1,11 +1,10 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GameState, Card, GamePhase, GameSettings, Player, Suit, HistoryItem } from './types';
+import { GameState, Card, GamePhase, GameSettings, Player, Suit, HistoryItem, TrickCard } from './types';
 import { createDeck, shuffle } from './constants';
-import { getBestMove } from './services/heartsAi';
+import { getBestMove } from './services/geminiService';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
-import { leaderboardService } from './services/leaderboardService';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -45,15 +44,8 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [showHistory, setShowHistory] = useState(false);
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
+  const [isHintLoading, setIsHintLoading] = useState(false);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
-  const [currentRank, setCurrentRank] = useState<number | null>(null);
-  
-  const passingDialogRef = useRef<HTMLDivElement>(null);
-  const handContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    leaderboardService.getRank('HEARTS').then(setCurrentRank);
-  }, []);
 
   useEffect(() => {
     if (gameState.phase !== 'GAME_OVER') {
@@ -62,13 +54,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       persistenceService.clearGame();
     }
   }, [gameState]);
-
-  useEffect(() => {
-    if (message) {
-      const timer = setTimeout(() => setMessage(""), 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [message]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
     const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -92,11 +77,13 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
     setDragInfo(null);
   };
 
-  const isCardPlayable = useCallback((card: Card): boolean => {
-    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== 0 || gameState.currentTrick.length >= 4 || clearingTrick) return true;
+  const isCardPlayable = useCallback((card: Card, playerIdx: number): boolean => {
+    if (gameState.phase !== 'PLAYING' || gameState.turnIndex !== playerIdx || gameState.currentTrick.length >= 4 || clearingTrick) return true;
     
-    const hand = gameState.players[0].hand;
-    const isFirstTrick = gameState.players.reduce((s, p) => s + p.hand.length, 0) === 52;
+    const player = gameState.players[playerIdx];
+    const hand = player.hand;
+    const totalCardsLeft = gameState.players.reduce((s, p) => s + p.hand.length, 0);
+    const isFirstTrick = totalCardsLeft === 52;
     const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
 
     if (isFirstTrick && !gameState.leadSuit) return card.id === '2-CLUBS';
@@ -105,7 +92,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       return hand.every(c => c.suit === 'HEARTS');
     }
     return true;
-  }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.heartsBroken, gameState.currentTrick.length, clearingTrick]);
+  }, [gameState.phase, gameState.turnIndex, gameState.leadSuit, gameState.players, gameState.heartsBroken, clearingTrick]);
 
   const startRound = useCallback(() => {
     const deck = shuffle(createDeck(gameState.settings));
@@ -149,7 +136,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
 
   useEffect(() => {
     if (gameState.phase === 'DEALING') {
-      const timer = setTimeout(startRound, 600);
+      const timer = setTimeout(startRound, 800);
       return () => clearTimeout(timer);
     }
   }, [gameState.phase, startRound]);
@@ -162,17 +149,20 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       setGameState(prev => {
         const cycle = (prev.roundNumber - 1) % 4;
         const players = prev.players.map(p => ({ ...p, hand: [...p.hand] }));
+        
         const passes: Card[][] = players.map((p, i) => {
-          if (i === 0) {
+          if (i === 0 && p.isHuman) {
             return p.hand.filter(c => prev.passingCards.includes(c.id));
           } else {
             return [...p.hand].sort((a, b) => b.value - a.value).slice(0, 3);
           }
         });
+
         players.forEach((p, i) => {
           const passIds = passes[i].map(c => c.id);
           p.hand = p.hand.filter(c => !passIds.includes(c.id));
         });
+
         const targets = cycle === 0 ? [1, 2, 3, 0] : cycle === 1 ? [3, 0, 1, 2] : [2, 3, 0, 1];
         passes.forEach((cards, sourceIdx) => {
           const targetIdx = targets[sourceIdx];
@@ -181,8 +171,10 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
             return b.value - a.value;
           });
         });
+
         let starter = 0;
         players.forEach((p, i) => { if (p.hand.some(c => c.id === '2-CLUBS')) starter = i; });
+
         return {
           ...prev,
           players,
@@ -193,23 +185,24 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       });
       setMessage("2 of Clubs Leads");
       setIsProcessing(false);
-    }, 1000);
+    }, 1200);
   }, [gameState.passingCards, gameState.roundNumber]);
 
   const playCard = useCallback((playerId: number, cardId: string) => {
     if (soundEnabled) playSound(SOUNDS.PLAY, 0.4);
-    if (playerId === 0) setMessage("");
     setGameState(prev => {
       const player = prev.players[playerId];
       const card = player.hand.find(c => c.id === cardId)!;
       const newPlayers = prev.players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => cardId !== c.id) } : p);
+      const nextTurnIndex = (prev.turnIndex + 1) % 4;
+      
       return {
         ...prev,
         players: newPlayers,
         currentTrick: [...prev.currentTrick, { playerId, card }],
         leadSuit: prev.currentTrick.length === 0 ? card.suit : prev.leadSuit,
         heartsBroken: prev.heartsBroken || card.suit === 'HEARTS',
-        turnIndex: (prev.turnIndex + 1) % 4,
+        turnIndex: nextTurnIndex,
       };
     });
     setHintCardId(null);
@@ -220,15 +213,14 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
     if (gameState.phase === 'PLAYING' && activePlayer && !activePlayer.isHuman && !isProcessing && !clearingTrick && gameState.currentTrick.length < 4) {
       const runAi = async () => {
         setIsProcessing(true);
-        await new Promise(r => setTimeout(r, 800));
-        const cardId = getBestMove(
+        await new Promise(r => setTimeout(r, 1000));
+        const cardId = await getBestMove(
           activePlayer.hand, 
           gameState.currentTrick, 
           gameState.leadSuit, 
           gameState.heartsBroken, 
           gameState.players.reduce((s,p)=>s+p.hand.length,0) === 52, 
-          gameState.players,
-          gameState.turnIndex,
+          activePlayer.name,
           gameState.settings
         );
         if (cardId) playCard(gameState.turnIndex, cardId);
@@ -236,7 +228,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       };
       runAi();
     }
-  }, [gameState.turnIndex, gameState.phase, isProcessing, clearingTrick, gameState.currentTrick.length]);
+  }, [gameState.turnIndex, gameState.phase, isProcessing, clearingTrick, gameState.currentTrick.length, playCard]);
 
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
@@ -266,27 +258,20 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
               if (prev.settings.shootTheMoon) newPlayers.forEach(p => { if (p.currentRoundScore === 26) shooterId = p.id; });
               const finalPlayers = newPlayers.map(p => ({ ...p, score: p.score + (shooterId !== -1 ? (p.id === shooterId ? 0 : 26) : p.currentRoundScore), currentRoundScore: 0 }));
               const over = finalPlayers.some(p => p.score >= prev.settings.targetScore);
-              
-              if (over) {
-                const sorted = [...finalPlayers].sort((a,b) => a.score - b.score);
-                const userRank = sorted.findIndex(p => p.id === 0);
-                const bonuses = [100, 50, 20, 0];
-                const bonus = bonuses[userRank] || 0;
-                leaderboardService.submitGameScore('HEARTS', bonus);
-              }
-
               return { ...prev, players: finalPlayers, phase: over ? 'GAME_OVER' : 'ROUND_END', currentTrick: [], leadSuit: null, dealerIndex: (prev.dealerIndex + 1) % 4, trickHistory: newHistory };
             }
+            
             return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId, trickHistory: newHistory };
           });
           setClearingTrick(null);
         }, 850);
       }, 800);
     }
-  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit]);
+  }, [gameState.currentTrick, soundEnabled]);
 
   const handleHumanInteract = (card: Card) => {
     if (isProcessing || clearingTrick) return;
+    const playerIdx = gameState.turnIndex;
     if (gameState.phase === 'PASSING') {
       setGameState(prev => {
         const alreadySelected = prev.passingCards.includes(card.id);
@@ -300,81 +285,98 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       return;
     }
     if (gameState.phase === 'PLAYING') {
-      if (gameState.turnIndex !== 0) return;
-      if (!isCardPlayable(card)) {
-        const hand = gameState.players[0].hand;
-        const isFirstTrick = gameState.players.reduce((s, p) => s + p.hand.length, 0) === 52;
+      if (!gameState.players[playerIdx].isHuman) return;
+      if (!isCardPlayable(card, playerIdx)) {
+        const hand = gameState.players[playerIdx].hand;
+        const totalCardsLeft = gameState.players.reduce((s, p) => s + p.hand.length, 0);
+        const isFirstTrick = totalCardsLeft === 52;
         const hasLeadSuit = hand.some(c => c.suit === gameState.leadSuit);
         if (isFirstTrick && !gameState.leadSuit && card.id !== '2-CLUBS') setMessage("Lead 2 of Clubs");
         else if (gameState.leadSuit && hasLeadSuit && card.suit !== gameState.leadSuit) setMessage(`Must follow ${gameState.leadSuit}`);
         else if (!gameState.leadSuit && card.suit === 'HEARTS' && !gameState.heartsBroken) setMessage("Hearts not broken");
         return;
       }
-      playCard(0, card.id);
+      playCard(playerIdx, card.id);
     }
   };
 
-  const CARD_WIDTH = 88;
-  const SIDE_MARGIN = 16; 
+  const requestHint = async () => {
+    const player = gameState.players[gameState.turnIndex];
+    if (!player.isHuman || isHintLoading) return;
+    setIsHintLoading(true);
+    try {
+        const bestCardId = await getBestMove(
+            player.hand,
+            gameState.currentTrick,
+            gameState.leadSuit,
+            gameState.heartsBroken,
+            gameState.players.reduce((s,p)=>s+p.hand.length,0) === 52,
+            player.name,
+            gameState.settings
+        );
+        setHintCardId(bestCardId);
+        setTimeout(() => setHintCardId(null), 3000);
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setIsHintLoading(false);
+    }
+  };
 
   const handLayout = useMemo(() => {
-    const hand = gameState.players[0].hand;
+    const playerIdx = 0; // Always user in single player
+    const player = gameState.players[playerIdx];
+    if (!player || !player.hand) return [];
+    
+    const hand = player.hand;
     const count = hand.length;
     if (count === 0) return [];
     
-    const containerWidth = window.innerWidth - (SIDE_MARGIN * 2);
-    const isPlayerTurn = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && gameState.currentTrick.length < 4 && !clearingTrick;
+    const containerWidth = window.innerWidth - 32;
+    const isPlayerTurn = gameState.phase === 'PLAYING' && player.isHuman && gameState.turnIndex === playerIdx && gameState.currentTrick.length < 4 && !clearingTrick;
 
     const weights = hand.map(card => {
-        if (!isPlayerTurn) return 1.0;
-        return isCardPlayable(card) ? 1.4 : 0.6;
+        if (!isPlayerTurn && gameState.phase !== 'PASSING') return 1.0;
+        return isCardPlayable(card, playerIdx) ? 1.4 : 0.6;
     });
 
     const sumWeights = weights.reduce((s, w) => s + w, 0);
-    const availableGapWidth = Math.max(0, containerWidth - CARD_WIDTH);
+    const availableGapWidth = Math.max(0, containerWidth - 88);
     const gapPerWeight = count > 1 ? availableGapWidth / sumWeights : 0;
     
-    let currentX = (containerWidth - (sumWeights * gapPerWeight + CARD_WIDTH)) / 2 + SIDE_MARGIN;
+    let currentX = (containerWidth - (sumWeights * gapPerWeight + 88)) / 2 + 16;
 
     return hand.map((card, idx) => {
         const x = currentX;
         currentX += weights[idx] * gapPerWeight;
-        return { card, x, isPlayable: isCardPlayable(card) };
+        return { card, x, isPlayable: isCardPlayable(card, playerIdx) };
     });
-  }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, gameState.currentTrick.length, clearingTrick, isCardPlayable]);
-
-  const SLOT_WIDTH = 88;
-  const SLOT_HEIGHT = 119;
-  const SLOT_GAP = 12;
-
-  const getPassingDirectionLabel = () => {
-    const directions = ["LEFT", "RIGHT", "ACROSS"];
-    return directions[(gameState.roundNumber - 1) % 4] || "NONE";
-  };
+  }, [gameState.players, gameState.turnIndex, gameState.phase, gameState.currentTrick.length, clearingTrick, isCardPlayable]);
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
       {/* HEADER */}
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <div className="flex gap-2">
-          <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
-          <button onClick={() => leaderboardService.openLeaderboard('HEARTS')} className="bg-white/10 rounded-xl px-2 h-10 flex items-center gap-1.5 shadow-lg border border-white/5 active:scale-95 transition-all">
-            <span className="text-xl">🏆</span>
-            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-tighter">
-              {currentRank ? `#${currentRank}` : 'RANK'}
-            </span>
-          </button>
+          <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">🏠</button>
           <button onClick={() => setShowHowToPlay(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">?</button>
         </div>
         <div className="text-center">
           <span className="text-[8px] text-white/40 font-black uppercase tracking-widest block leading-none mb-1">Round</span>
           <span className="text-3xl font-black italic text-yellow-500">{gameState.roundNumber}</span>
         </div>
-        <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
+        <div className="flex gap-2">
+           {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
+             <button onClick={requestHint} disabled={isHintLoading} className={`w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-xl shadow-lg border border-indigo-400 active:scale-95 transition-all ${isHintLoading ? 'animate-pulse' : ''}`}>
+               {isHintLoading ? '⏳' : '🪄'}
+             </button>
+           )}
+           <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
+        </div>
       </div>
 
       <div className="absolute top-[12%] left-1/2 -translate-x-1/2 z-[100] w-full flex justify-center pointer-events-none px-6">
-        {message && gameState.phase !== 'PASSING' && (
+        {message && (
           <div className="bg-yellow-400 text-black px-6 py-2 rounded-full text-[11px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">
             {message}
           </div>
@@ -382,76 +384,40 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="h-[70%] relative w-full">
-        {gameState.phase === 'PASSING' && (
-          <div className="absolute inset-0 bg-black/75 z-[8] animate-fadeIn" />
-        )}
-
-        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="HEARTS" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-1 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="HEARTS" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-1 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="HEARTS" phase={gameState.phase} />
-        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="HEARTS" phase={gameState.phase} />
+        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} phase={gameState.phase} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-4 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} phase={gameState.phase} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-4 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} phase={gameState.phase} />
+        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} phase={gameState.phase} />
 
         {gameState.phase === 'PASSING' && (
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[60%] z-[20] w-[90%] max-w-sm flex flex-col items-center animate-fadeIn">
-            <div className="bg-[#121212] border-2 border-[#d4af37] rounded-[3rem] p-8 shadow-[0_30px_60px_-12px_rgba(0,0,0,0.9)] w-full flex flex-col items-center relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-white/5 to-transparent pointer-events-none" />
-              
-              <div className="mb-6 text-center relative z-10">
-                <h3 className="text-[#d4af37] font-black uppercase text-[12px] tracking-[0.4em] mb-1">STRATEGIC PASS</h3>
-                <div className="text-white text-3xl font-black italic tracking-tighter uppercase leading-none">TO {getPassingDirectionLabel()}</div>
+            <div className="bg-[#121212] border-2 border-[#eab308] rounded-[3rem] p-8 shadow-[0_30px_60px_-12px_rgba(0,0,0,0.9)] w-full flex flex-col items-center relative overflow-hidden">
+              <div className="mb-6 text-center">
+                <h3 className="text-[#eab308] font-black uppercase text-[12px] tracking-[0.4em] mb-1">STRATEGIC PASS</h3>
+                <div className="text-white text-3xl font-black italic tracking-tighter uppercase leading-none">TO {["LEFT", "RIGHT", "ACROSS"][(gameState.roundNumber - 1) % 4] || "NONE"}</div>
               </div>
-
-              <div className="flex items-center justify-center gap-4 mb-8 relative z-10" ref={passingDialogRef}>
+              <div className="flex gap-4 mb-8">
                 {[0, 1, 2].map(i => (
-                  <div key={i} className="staged-slot rounded-xl flex items-center justify-center border-2 border-[#d4af37]/20 bg-black/40 overflow-hidden" style={{ width: `${SLOT_WIDTH}px`, height: `${SLOT_HEIGHT}px` }}>
-                    <span className="text-white/5 font-black text-6xl">?</span>
+                  <div key={i} className="staged-slot w-[75px] h-[100px] rounded-xl flex items-center justify-center border-2 border-white/10">
+                    <span className="text-white/5 font-black text-4xl">{gameState.passingCards[i] ? '✓' : '?'}</span>
                   </div>
                 ))}
               </div>
-
-              <div className="h-14 w-full relative z-10">
-                {gameState.passingCards.length === 3 && (
-                  <button onClick={handleConfirmPass} className="w-full h-full bg-green-600 hover:bg-green-500 rounded-2xl font-black text-lg text-white uppercase shadow-[0_8px_0_rgb(21,128,61)] active:shadow-none active:translate-y-2 transition-all pointer-events-auto">
-                    Confirm Selection
-                  </button>
-                )}
-                {gameState.passingCards.length < 3 && (
-                  <div className="w-full h-full flex items-center justify-center text-[#d4af37]/40 text-[10px] font-black uppercase tracking-widest border border-[#d4af37]/20 rounded-2xl bg-black/30">
-                    Choose {3 - gameState.passingCards.length} Cards
-                  </div>
-                )}
-              </div>
+              <button disabled={gameState.passingCards.length !== 3} onClick={handleConfirmPass} className={`w-full h-14 rounded-2xl font-black text-lg uppercase transition-all shadow-xl ${gameState.passingCards.length === 3 ? 'intermission-btn text-black active:translate-y-1' : 'bg-white/5 text-white/20'}`}>
+                {gameState.passingCards.length < 3 ? `CHOOSE ${3-gameState.passingCards.length} MORE` : 'CONFIRM PASS'}
+              </button>
             </div>
           </div>
         )}
 
-        {/* TRICK AREA: Refined Symmetric Cross Formation */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[20rem] h-[20rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const offsets = [
-               { x: 0,   y: 45,  rot: '2deg' },   // P0 (Bottom)
-               { x: 60,  y: 0,   rot: '5deg' },   // P1 (Right)
-               { x: 0,   y: -45, rot: '-3deg' },  // P2 (Top)
-               { x: -60, y: 0,   rot: '-6deg' }   // P3 (Left)
-             ];
+             const offsets = [{x:0,y:45,r:'2deg'}, {x:60,y:0,r:'5deg'}, {x:0,y:-45,r:'-3deg'}, {x:-60,y:0,r:'-6deg'}];
              const off = offsets[t.playerId];
-             const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
-             const startPos = [
-                { x: 0, y: 350 }, { x: 380, y: 0 }, { x: 0, y: -350 }, { x: -380, y: 0 }
-             ][t.playerId];
-
+             const winDir = [{x:0,y:600}, {x:500,y:0}, {x:0,y:-600}, {x:-500,y:0}][clearingTrick?.winnerId ?? 0];
              return (
                <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} 
-                 style={{ 
-                   '--play-x': `${off.x}px`, 
-                   '--play-y': `${off.y}px`, 
-                   '--play-rot': off.rot, 
-                   '--start-x': `${startPos.x}px`,
-                   '--start-y': `${startPos.y}px`,
-                   '--clear-x': `${winDir.x}px`, 
-                   '--clear-y': `${winDir.y}px`, 
-                   zIndex: 10 + idx 
-                 } as any}>
+                 style={{ '--play-x':`${off.x}px`,'--play-y':`${off.y}px`,'--play-rot':off.r,'--start-x':'0px','--start-y':'0px','--clear-x':`${winDir.x}px`,'--clear-y':`${winDir.y}px`,zIndex:10+idx } as any}>
                  <CardView card={t.card} size="md" />
                </div>
              );
@@ -459,57 +425,24 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
         </div>
       </div>
 
-      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black via-black/40 to-transparent overflow-visible" ref={handContainerRef}>
+      <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black via-black/40 to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {handLayout.map((item, idx, arr) => {
-             const { card, x: tx, isPlayable } = item;
-             const centerIdx = (arr.length - 1) / 2;
-             const diffFromCenter = idx - centerIdx;
-             const rot = diffFromCenter * 1.5; 
-             const ty = Math.pow(diffFromCenter, 2) * 0.4; 
+             const { card, x, isPlayable } = item;
              const isDragging = dragInfo?.id === card.id;
-             const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
-             const passingIndex = gameState.passingCards.indexOf(card.id);
-             const isSelectedForPass = passingIndex !== -1;
-             
-             let finalTx = tx;
-             let finalTy = ty; 
-             let finalRot = rot;
-             let finalZIndex = 100 + idx;
-             let finalScale = isDragging ? 1.15 : (isCardPlayable && gameState.phase === 'PLAYING' && gameState.turnIndex === 0 ? 1 : (gameState.phase === 'PLAYING' && gameState.turnIndex === 0 ? 0.95 : 1));
+             const isSelectedForPass = gameState.passingCards.includes(card.id);
+             const isDimmed = gameState.phase === 'PLAYING' && !isPlayable && gameState.turnIndex === 0;
 
-             if (isSelectedForPass && passingDialogRef.current && handContainerRef.current) {
-                const dialogRect = passingDialogRef.current.getBoundingClientRect();
-                const handRect = handContainerRef.current.getBoundingClientRect();
-                const totalSlotsWidth = (3 * SLOT_WIDTH) + (2 * SLOT_GAP);
-                const firstSlotLeft = dialogRect.left + (dialogRect.width - totalSlotsWidth) / 2;
-                const targetX = firstSlotLeft + (passingIndex * (SLOT_WIDTH + SLOT_GAP));
-                const targetY = dialogRect.top + (dialogRect.height - SLOT_HEIGHT) / 2;
-                finalTx = targetX - handRect.left;
-                finalTy = targetY - handRect.top;
-                finalRot = 0;
-                finalZIndex = 500;
-                finalScale = 1.0; 
-             }
-
-             const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[600]' : ''}`}
                   style={{ 
-                    transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${finalScale})`, 
-                    zIndex: isDragging ? 700 : finalZIndex, 
-                    animationDelay: `${idx * 0.015}s`,
-                    pointerEvents: gameState.phase === 'PASSING' || (gameState.phase === 'PLAYING' && gameState.turnIndex === 0) ? 'auto' : 'none'
+                    transform: `translate3d(${x}px, ${Math.pow(idx - (arr.length-1)/2, 2) * 0.4 + (isDragging ? dragInfo.currentY - dragInfo.startY : (isSelectedForPass ? -120 : 0))}px, 0) rotate(${(idx - (arr.length-1)/2)*2}deg) scale(${isDragging ? 1.15 : (isDimmed ? 0.95 : 1)})`, 
+                    opacity: isDimmed ? 0.6 : 1,
+                    animationDelay: `${idx * 0.03}s` 
                   }}
                 >
-                  <CardView 
-                    card={card} 
-                    size="lg" 
-                    highlighted={isSelectedForPass || (isDragging && Math.abs(dragOffset) >= 50)} 
-                    hint={hintCardId === card.id}
-                    inactive={isDimmed}
-                  />
+                  <CardView card={card} size="lg" highlighted={isSelectedForPass} hint={hintCardId === card.id} inactive={isDimmed} />
                 </div>
              );
            })}
@@ -520,17 +453,17 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       {showHowToPlay && <HowToPlayModal gameType="HEARTS" onClose={() => setShowHowToPlay(false)} />}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
-        <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND END"} subtitle="Standings Update">
-            <div className="w-full space-y-4 mb-12">
+        <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL RESULTS" : "ROUND END"} subtitle="The Scoreboard">
+            <div className="w-full space-y-3 mb-10">
                {gameState.players.map(p => (
-                 <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-3xl border border-white/10 shadow-inner">
-                    <div className="flex items-center gap-4"><span className="text-4xl drop-shadow-lg">{p.avatar}</span><div className="flex flex-col items-start text-left"><span className="font-black text-sm uppercase tracking-tight">{p.name}</span><span className="text-[10px] text-white/30 font-bold uppercase tracking-tighter">Total Score: {p.score}</span></div></div>
-                    <div className="text-right text-3xl font-black italic text-yellow-500 drop-shadow-md">+{p.currentRoundScore}</div>
+                 <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-3xl border border-white/10">
+                    <div className="flex items-center gap-3"><span className="text-3xl">{p.avatar}</span><div className="text-left"><span className="font-black text-sm uppercase block leading-none mb-1">{p.name}</span><span className="text-[9px] opacity-30 font-bold uppercase">Total: {p.score}</span></div></div>
+                    <div className="text-2xl font-black italic text-yellow-500">+{p.currentRoundScore}</div>
                  </div>
                ))}
             </div>
             <button onClick={() => { if (gameState.phase === 'GAME_OVER') onExit(); else { setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1})); } }} 
-              className="w-full py-6 bg-green-600 rounded-[2.5rem] font-black text-2xl uppercase shadow-2xl border-b-8 border-green-800 tracking-[0.1em]">CONTINUE</button>
+              className="intermission-btn w-full py-5 rounded-3xl font-black text-2xl text-black uppercase shadow-2xl active:translate-y-1 transition-all">NEXT ROUND</button>
         </Overlay>
       )}
     </div>

@@ -2,15 +2,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Card, Suit, TrickCard, GameSettings } from "../types";
 
-/**
- * Initialize the Gemini API client using the environment variable.
- */
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-/**
- * A highly intelligent AI for Hearts powered by Gemini.
- * Falls back to rule-based logic if the API call fails or for performance.
- */
 export async function getBestMove(
   hand: Card[],
   currentTrick: TrickCard[],
@@ -21,21 +14,26 @@ export async function getBestMove(
   settings: GameSettings = { shootTheMoon: true, noPassing: false, jackOfDiamonds: false, targetScore: 100 }
 ): Promise<string> {
   
-  // Use Gemini to decide the best move
   try {
     const prompt = `
-      You are playing a game of Hearts. 
+      You are playing a professional game of Hearts. 
       Player: ${playerName}
-      Your Hand: ${hand.map(c => c.id).join(', ')}
-      Current Trick: ${currentTrick.map(t => `Player ${t.playerId}: ${t.card.id}`).join(', ')}
+      Your Hand: ${hand.map(c => `${c.rank} of ${c.suit}`).join(', ')}
+      Current Trick: ${currentTrick.length === 0 ? 'Leading the trick' : currentTrick.map(t => `Player ${t.playerId}: ${t.card.rank} of ${t.card.suit}`).join(', ')}
       Lead Suit: ${leadSuit || 'None'}
       Hearts Broken: ${heartsBroken}
       Is First Trick: ${isFirstTrick}
       Jack of Diamonds Points Enabled: ${settings.jackOfDiamonds}
       
-      Strategy: Avoid points (Hearts and Queen of Spades) unless you are trying to 'Shoot the Moon'. 
-      If you can't follow the lead suit, discard high cards or point cards.
-      Choose the best card ID from your hand to play.
+      Strategy: 
+      - If you have 2 of Clubs and it is the first trick, you MUST play it.
+      - Follow suit if possible.
+      - If you can't follow suit, discard high cards or point cards (Hearts or Queen of Spades).
+      - If you are leading, avoid leading high cards unless you want to draw out the Queen of Spades.
+      - Decide whether to 'Shoot the Moon' (try to get all 26 points) if your hand is extremely strong.
+      
+      Respond with ONLY the JSON object of the card ID you choose.
+      The card ID format is rank-suit (e.g., '2-CLUBS', 'Q-SPADES').
     `;
 
     const response = await ai.models.generateContent({
@@ -48,11 +46,7 @@ export async function getBestMove(
           properties: {
             cardId: {
               type: Type.STRING,
-              description: "The ID of the card to play, e.g., 'A-SPADES'",
-            },
-            reasoning: {
-              type: Type.STRING,
-              description: "Short explanation for the move",
+              description: "The ID of the card to play",
             }
           },
           required: ["cardId"],
@@ -62,81 +56,29 @@ export async function getBestMove(
 
     const result = JSON.parse(response.text || '{}');
     const selectedCardId = result.cardId;
-
-    // Validate if the AI selected a card that is actually in hand
-    if (selectedCardId && hand.some(c => c.id === selectedCardId)) {
-      return selectedCardId;
-    }
+    if (selectedCardId && hand.some(c => c.id === selectedCardId)) return selectedCardId;
   } catch (error) {
-    console.error("Gemini AI error, falling back to rule-based logic:", error);
+    console.error("Gemini AI failed, using fallback:", error);
   }
 
   // FALLBACK RULE-BASED LOGIC
-  const validHand = hand.filter(c => c !== null && c !== undefined);
-
-  const validCards = validHand.filter(card => {
+  const validHand = hand.filter(c => !!c);
+  const playable = validHand.filter(card => {
     if (!leadSuit) {
       if (isFirstTrick) return card.id === '2-CLUBS';
-      if (!heartsBroken && card.suit === 'HEARTS') {
-        return validHand.every(c => c && c.suit === 'HEARTS');
-      }
+      if (!heartsBroken && card.suit === 'HEARTS') return validHand.every(c => c.suit === 'HEARTS');
       return true;
     }
-    const hasLeadSuit = validHand.some(c => c && c.suit === leadSuit);
-    if (hasLeadSuit) return card.suit === leadSuit;
-    return true; // Discarding
+    return validHand.some(c => c.suit === leadSuit) ? card.suit === leadSuit : true;
   });
 
-  const playable = validCards.length > 0 ? validCards : validHand;
-  if (playable.length === 0) return '';
-
-  const isJoDAvailable = settings.jackOfDiamonds;
+  const candidates = playable.length > 0 ? playable : validHand;
   
-  if (!leadSuit || currentTrick.length === 0) {
-    if (isFirstTrick) {
-      const startCard = playable.find(c => c.id === '2-CLUBS');
-      return startCard ? startCard.id : (playable[0]?.id || '');
-    }
-    const sortedLowToHigh = [...playable].sort((a, b) => a.value - b.value);
-    const lowSpade = playable.find(c => c.suit === 'SPADES' && c.value < 12);
-    if (lowSpade) return lowSpade.id;
-    return sortedLowToHigh[0]?.id || playable[0]?.id || '';
+  // Basic heuristic fallback:
+  if (leadSuit) {
+    const sorted = [...candidates].sort((a,b) => a.value - b.value);
+    // If trick has points, play lowest card.
+    return sorted[0].id;
   }
-
-  const currentLeadSuit = leadSuit;
-  const hasLeadSuit = validHand.some(c => c && c.suit === currentLeadSuit);
-  const trickHasPoints = currentTrick.some(t => t.card && t.card.points > 0);
-  const trickHasJoD = currentTrick.some(t => t.card && t.card.suit === 'DIAMONDS' && t.card.rank === 'J');
-
-  const suitCardsInTrick = currentTrick.filter(t => t.card && t.card.suit === currentLeadSuit);
-  const highestInTrick = suitCardsInTrick.sort((a, b) => {
-    if (!a.card || !b.card) return 0;
-    return b.card.value - a.card.value;
-  })[0];
-
-  if (hasLeadSuit && highestInTrick && highestInTrick.card) {
-    const suitCards = playable.filter(c => c.suit === currentLeadSuit).sort((a, b) => b.value - a.value);
-    
-    if (isJoDAvailable && trickHasJoD) {
-       const winners = suitCards.filter(c => c.value > (highestInTrick.card?.value || 0));
-       if (winners.length > 0) return winners[0].id;
-    }
-
-    if (trickHasPoints || currentTrick.length === 3) {
-      const losers = suitCards.filter(c => c.value < (highestInTrick.card?.value || 0));
-      if (losers.length > 0) return losers[0].id; 
-      return suitCards[suitCards.length - 1].id; 
-    } else {
-      return suitCards[suitCards.length - 1].id; 
-    }
-  } else {
-    const qSpades = playable.find(c => c.id === 'Q-SPADES');
-    if (qSpades) return qSpades.id;
-    const hearts = playable.filter(c => c.suit === 'HEARTS').sort((a, b) => b.value - a.value);
-    if (hearts.length > 0) return hearts[0].id;
-    const discardables = playable.filter(c => !(settings.jackOfDiamonds && c.suit === 'DIAMONDS' && c.rank === 'J'));
-    const targetPlayable = discardables.length > 0 ? discardables : playable;
-    const sortedHighToLow = [...targetPlayable].sort((a, b) => b.value - a.value);
-    return sortedHighToLow[0]?.id || playable[0]?.id || '';
-  }
+  return candidates[0].id;
 }

@@ -21,7 +21,6 @@ export default function App() {
   const [resumedState, setResumedState] = useState<GameState | null>(null);
   const [hasSavedGame, setHasSavedGame] = useState(false);
 
-  // Check for saved games on startup
   useEffect(() => {
     async function checkSaved() {
       const saved = await persistenceService.loadGame();
@@ -64,40 +63,30 @@ export default function App() {
   }
 
   if (screen === 'GAME') {
-    if (gameType === 'SPADES') {
-      return (
-        <div className="felt-bg h-screen w-full">
+    return (
+      <div className="felt-bg h-screen w-full">
+        {gameType === 'SPADES' ? (
           <SpadesGame 
             initialPlayers={INITIAL_PLAYERS} 
             initialState={resumedState}
             onExit={handleExitGame} 
             soundEnabled={soundEnabled} 
           />
-        </div>
-      );
-    }
-
-    if (gameType === 'CALLBREAK') {
-      return (
-        <div className="felt-bg h-screen w-full">
+        ) : gameType === 'CALLBREAK' ? (
           <CallbreakGame 
             initialPlayers={INITIAL_PLAYERS} 
             initialState={resumedState}
             onExit={handleExitGame} 
             soundEnabled={soundEnabled} 
           />
-        </div>
-      );
-    }
-    
-    return (
-      <div className="felt-bg h-screen w-full">
-        <HeartsGame 
-          initialPlayers={INITIAL_PLAYERS} 
-          initialState={resumedState}
-          onExit={handleExitGame} 
-          soundEnabled={soundEnabled} 
-        />
+        ) : (
+          <HeartsGame 
+            initialPlayers={INITIAL_PLAYERS} 
+            initialState={resumedState}
+            onExit={handleExitGame} 
+            soundEnabled={soundEnabled} 
+          />
+        )}
       </div>
     );
   }
