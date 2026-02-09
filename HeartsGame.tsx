@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GameState, Card, GamePhase, GameSettings, Player, Suit, HistoryItem, TrickCard } from './types';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { GameState, Card, GamePhase, Player, Suit, HistoryItem, TrickCard } from './types';
 import { createDeck, shuffle } from './constants';
-import { getBestMove } from './services/geminiService';
+import { getBestMove } from './services/heartsAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 
@@ -44,7 +44,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [showHistory, setShowHistory] = useState(false);
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
-  const [isHintLoading, setIsHintLoading] = useState(false);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
 
   useEffect(() => {
@@ -154,6 +153,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
           if (i === 0 && p.isHuman) {
             return p.hand.filter(c => prev.passingCards.includes(c.id));
           } else {
+            // Rule-based AI pass: 3 highest cards (Standard strategy)
             return [...p.hand].sort((a, b) => b.value - a.value).slice(0, 3);
           }
         });
@@ -213,14 +213,16 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
     if (gameState.phase === 'PLAYING' && activePlayer && !activePlayer.isHuman && !isProcessing && !clearingTrick && gameState.currentTrick.length < 4) {
       const runAi = async () => {
         setIsProcessing(true);
+        // Instant rule-based move
         await new Promise(r => setTimeout(r, 1000));
-        const cardId = await getBestMove(
+        const cardId = getBestMove(
           activePlayer.hand, 
           gameState.currentTrick, 
           gameState.leadSuit, 
           gameState.heartsBroken, 
           gameState.players.reduce((s,p)=>s+p.hand.length,0) === 52, 
-          activePlayer.name,
+          gameState.players,
+          gameState.turnIndex,
           gameState.settings
         );
         if (cardId) playCard(gameState.turnIndex, cardId);
@@ -228,7 +230,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       };
       runAi();
     }
-  }, [gameState.turnIndex, gameState.phase, isProcessing, clearingTrick, gameState.currentTrick.length, playCard]);
+  }, [gameState.turnIndex, gameState.phase, isProcessing, clearingTrick, gameState.currentTrick.length, playCard, gameState.leadSuit, gameState.heartsBroken, gameState.players, gameState.settings]);
 
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
@@ -267,7 +269,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
         }, 850);
       }, 800);
     }
-  }, [gameState.currentTrick, soundEnabled]);
+  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit]);
 
   const handleHumanInteract = (card: Card) => {
     if (isProcessing || clearingTrick) return;
@@ -300,27 +302,22 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
     }
   };
 
-  const requestHint = async () => {
-    const player = gameState.players[gameState.turnIndex];
-    if (!player.isHuman || isHintLoading) return;
-    setIsHintLoading(true);
-    try {
-        const bestCardId = await getBestMove(
-            player.hand,
-            gameState.currentTrick,
-            gameState.leadSuit,
-            gameState.heartsBroken,
-            gameState.players.reduce((s,p)=>s+p.hand.length,0) === 52,
-            player.name,
-            gameState.settings
-        );
-        setHintCardId(bestCardId);
-        setTimeout(() => setHintCardId(null), 3000);
-    } catch (e) {
-        console.error(e);
-    } finally {
-        setIsHintLoading(false);
-    }
+  const showHint = () => {
+    const player = gameState.players[0];
+    if (gameState.turnIndex !== 0 || gameState.phase !== 'PLAYING') return;
+    
+    const bestCardId = getBestMove(
+        player.hand,
+        gameState.currentTrick,
+        gameState.leadSuit,
+        gameState.heartsBroken,
+        gameState.players.reduce((s,p)=>s+p.hand.length,0) === 52,
+        gameState.players,
+        0,
+        gameState.settings
+    );
+    setHintCardId(bestCardId);
+    setTimeout(() => setHintCardId(null), 2500);
   };
 
   const handLayout = useMemo(() => {
@@ -367,8 +364,8 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
         </div>
         <div className="flex gap-2">
            {gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && (
-             <button onClick={requestHint} disabled={isHintLoading} className={`w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-xl shadow-lg border border-indigo-400 active:scale-95 transition-all ${isHintLoading ? 'animate-pulse' : ''}`}>
-               {isHintLoading ? '⏳' : '🪄'}
+             <button onClick={showHint} className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-xl shadow-lg border border-indigo-400 active:scale-95 transition-all">
+               🪄
              </button>
            )}
            <button onClick={() => setShowHistory(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">📜</button>
@@ -403,7 +400,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
                   </div>
                 ))}
               </div>
-              <button disabled={gameState.passingCards.length !== 3} onClick={handleConfirmPass} className={`w-full h-14 rounded-2xl font-black text-lg uppercase transition-all shadow-xl ${gameState.passingCards.length === 3 ? 'intermission-btn text-black active:translate-y-1' : 'bg-white/5 text-white/20'}`}>
+              <button disabled={gameState.passingCards.length !== 3} onClick={handleConfirmPass} className={`w-full h-14 rounded-2xl font-black text-lg uppercase transition-all shadow-xl ${gameState.passingCards.length === 3 ? 'bg-yellow-500 text-black active:translate-y-1' : 'bg-white/5 text-white/20'}`}>
                 {gameState.passingCards.length < 3 ? `CHOOSE ${3-gameState.passingCards.length} MORE` : 'CONFIRM PASS'}
               </button>
             </div>
@@ -463,7 +460,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
                ))}
             </div>
             <button onClick={() => { if (gameState.phase === 'GAME_OVER') onExit(); else { setGameState(p => ({...p, phase: 'DEALING', roundNumber: p.roundNumber + 1})); } }} 
-              className="intermission-btn w-full py-5 rounded-3xl font-black text-2xl text-black uppercase shadow-2xl active:translate-y-1 transition-all">NEXT ROUND</button>
+              className="w-full py-5 rounded-3xl font-black text-2xl bg-yellow-500 text-black uppercase shadow-2xl active:translate-y-1 transition-all">NEXT ROUND</button>
         </Overlay>
       )}
     </div>
