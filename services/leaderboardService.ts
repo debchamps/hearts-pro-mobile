@@ -5,13 +5,11 @@ import { GameType } from '../types';
 const RANKS_CACHE_KEY = 'LOCAL_LEADERBOARD_CACHE';
 
 /**
- * A simplified local-first leaderboard service 
- * to ensure app stability across different builds.
- * Strictly avoids any native Play Games SDK calls.
+ * A simplified local-first leaderboard service.
+ * Strictly avoids any native Play Games SDK calls to fix build issues.
  */
 export const leaderboardService = {
   async ensureAuthenticated(): Promise<boolean> {
-    // Always authenticated in local mode
     return true; 
   },
 
@@ -31,7 +29,7 @@ export const leaderboardService = {
   },
 
   async syncPendingScores() {
-    // No-op for local-only mode
+    // No-op for local mode
   },
 
   async getRank(gameType: GameType): Promise<number | null> {
@@ -39,6 +37,7 @@ export const leaderboardService = {
       const { value } = await Preferences.get({ key: RANKS_CACHE_KEY });
       if (value) {
         const cache = JSON.parse(value);
+        // Returns 1 just to show "Ranked" status if a score exists
         return cache[gameType] ? 1 : null; 
       }
       return null;
@@ -48,7 +47,6 @@ export const leaderboardService = {
   },
 
   async openLeaderboard(gameType: GameType) {
-    // UI-only fallback as native boards are disabled to fix build issues
-    alert(`Local records only for ${gameType}. Native services are currently disabled for stability.`);
+    alert(`Local high scores are saved! Native leaderboard services are disabled for build stability.`);
   }
 };
