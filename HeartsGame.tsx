@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameState, Card, GamePhase, Player, Suit, HistoryItem, TrickCard } from './types';
 import { createDeck, shuffle } from './constants';
 import { getBestMove } from './services/heartsAi';
-import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal } from './SharedComponents';
+import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 
 const SOUNDS = {
@@ -45,6 +45,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+  const [editingAvatarPlayerId, setEditingAvatarPlayerId] = useState<number | null>(null);
 
   useEffect(() => {
     if (gameState.phase !== 'GAME_OVER') {
@@ -153,7 +154,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
           if (i === 0 && p.isHuman) {
             return p.hand.filter(c => prev.passingCards.includes(c.id));
           } else {
-            // Rule-based AI pass: 3 highest cards (Standard strategy)
             return [...p.hand].sort((a, b) => b.value - a.value).slice(0, 3);
           }
         });
@@ -213,7 +213,6 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
     if (gameState.phase === 'PLAYING' && activePlayer && !activePlayer.isHuman && !isProcessing && !clearingTrick && gameState.currentTrick.length < 4) {
       const runAi = async () => {
         setIsProcessing(true);
-        // Instant rule-based move
         await new Promise(r => setTimeout(r, 1000));
         const cardId = getBestMove(
           activePlayer.hand, 
@@ -321,7 +320,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
   };
 
   const handLayout = useMemo(() => {
-    const playerIdx = 0; // Always user in single player
+    const playerIdx = 0; 
     const player = gameState.players[playerIdx];
     if (!player || !player.hand) return [];
     
@@ -350,9 +349,17 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
     });
   }, [gameState.players, gameState.turnIndex, gameState.phase, gameState.currentTrick.length, clearingTrick, isCardPlayable]);
 
+  const updateAvatar = (avatar: string) => {
+    if (editingAvatarPlayerId === null) return;
+    setGameState(prev => ({
+      ...prev,
+      players: prev.players.map(p => p.id === editingAvatarPlayerId ? { ...p, avatar } : p)
+    }));
+    setEditingAvatarPlayerId(null);
+  };
+
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
-      {/* HEADER */}
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <div className="flex gap-2">
           <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">🏠</button>
@@ -381,10 +388,10 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="h-[70%] relative w-full">
-        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-4 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-4 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} phase={gameState.phase} />
-        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} phase={gameState.phase} />
+        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(2)} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-4 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(3)} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-4 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(1)} />
+        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(0)} />
 
         {gameState.phase === 'PASSING' && (
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[60%] z-[20] w-[90%] max-w-sm flex flex-col items-center animate-fadeIn">
@@ -448,13 +455,25 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled 
 
       {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
       {showHowToPlay && <HowToPlayModal gameType="HEARTS" onClose={() => setShowHowToPlay(false)} />}
+      {editingAvatarPlayerId !== null && (
+        <AvatarSelectionModal 
+          currentAvatar={gameState.players[editingAvatarPlayerId].avatar} 
+          onSelect={updateAvatar} 
+          onClose={() => setEditingAvatarPlayerId(null)} 
+        />
+      )}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL RESULTS" : "ROUND END"} subtitle="The Scoreboard">
             <div className="w-full space-y-3 mb-10">
                {gameState.players.map(p => (
                  <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-3xl border border-white/10">
-                    <div className="flex items-center gap-3"><span className="text-3xl">{p.avatar}</span><div className="text-left"><span className="font-black text-sm uppercase block leading-none mb-1">{p.name}</span><span className="text-[9px] opacity-30 font-bold uppercase">Total: {p.score}</span></div></div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center bg-white/10">
+                        {p.avatar.startsWith('data:image') ? <img src={p.avatar} className="w-full h-full object-cover" alt="Avatar" /> : <span className="text-3xl">{p.avatar}</span>}
+                      </div>
+                      <div className="text-left"><span className="font-black text-sm uppercase block leading-none mb-1">{p.name}</span><span className="text-[9px] opacity-30 font-bold uppercase">Total: {p.score}</span></div>
+                    </div>
                     <div className="text-2xl font-black italic text-yellow-500">+{p.currentRoundScore}</div>
                  </div>
                ))}

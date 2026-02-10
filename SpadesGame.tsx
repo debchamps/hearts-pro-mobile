@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameState, Card, GamePhase, GameSettings, Player, HistoryItem, SpadesRoundSummary } from './types';
 import { createDeck, shuffle } from './constants';
 import { getSpadesBid, getSpadesMove } from './services/spadesAi';
-import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, ScorecardModal } from './SharedComponents';
+import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, ScorecardModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 import { leaderboardService } from './services/leaderboardService';
 
@@ -49,6 +49,7 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
   const [hintCardId, setHintCardId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
   const [currentRank, setCurrentRank] = useState<number | null>(null);
+  const [editingAvatarPlayerId, setEditingAvatarPlayerId] = useState<number | null>(null);
 
   useEffect(() => {
     leaderboardService.getRank('SPADES').then(setCurrentRank);
@@ -340,6 +341,15 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
     });
   }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, gameState.currentTrick.length, clearingTrick, isCardPlayable]);
 
+  const updateAvatar = (avatar: string) => {
+    if (editingAvatarPlayerId === null) return;
+    setGameState(prev => ({
+      ...prev,
+      players: prev.players.map(p => p.id === editingAvatarPlayerId ? { ...p, avatar } : p)
+    }));
+    setEditingAvatarPlayerId(null);
+  };
+
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden" onMouseMove={onDragMove} onTouchMove={onDragMove}>
       {/* HEADER */}
@@ -379,10 +389,10 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="h-[70%] relative w-full">
-        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-2 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-2 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} />
-        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} />
+        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(2)} />
+        <Avatar player={gameState.players[3]} pos="top-1/2 left-2 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(3)} />
+        <Avatar player={gameState.players[1]} pos="top-1/2 right-2 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(1)} />
+        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(0)} />
 
         {/* TRICK AREA: Refined Symmetric Cross Formation */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
@@ -472,6 +482,13 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
       {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
       {showHowToPlay && <HowToPlayModal gameType="SPADES" onClose={() => setShowHowToPlay(false)} />}
       {showScorecard && <ScorecardModal history={gameState.spadesHistory || []} currentScores={gameState.teamScores} currentBags={gameState.teamBags} onClose={() => setShowScorecard(false)} />}
+      {editingAvatarPlayerId !== null && (
+        <AvatarSelectionModal 
+          currentAvatar={gameState.players[editingAvatarPlayerId].avatar} 
+          onSelect={updateAvatar} 
+          onClose={() => setEditingAvatarPlayerId(null)} 
+        />
+      )}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND END"} subtitle="Standings Update">

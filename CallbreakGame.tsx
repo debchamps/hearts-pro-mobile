@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameState, Card, GamePhase, Player, HistoryItem, CallbreakRoundSummary } from './types';
 import { createDeck, shuffle } from './constants';
 import { getCallbreakBid, getCallbreakMove } from './services/callbreakAi';
-import { Avatar, CardView, Overlay, HistoryModal, CallbreakScorecardModal } from './SharedComponents';
+import { Avatar, CardView, Overlay, HistoryModal, CallbreakScorecardModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 import { leaderboardService } from './services/leaderboardService';
 
@@ -47,6 +47,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
   const [showScorecard, setShowScorecard] = useState(false);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
   const [currentRank, setCurrentRank] = useState<number | null>(null);
+  const [editingAvatarPlayerId, setEditingAvatarPlayerId] = useState<number | null>(null);
 
   useEffect(() => {
     leaderboardService.getRank('CALLBREAK').then(setCurrentRank);
@@ -301,6 +302,15 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
     });
   }, [gameState.players[0].hand, gameState.phase, gameState.turnIndex, isCardPlayable]);
 
+  const updateAvatar = (avatar: string) => {
+    if (editingAvatarPlayerId === null) return;
+    setGameState(prev => ({
+      ...prev,
+      players: prev.players.map(p => p.id === editingAvatarPlayerId ? { ...p, avatar } : p)
+    }));
+    setEditingAvatarPlayerId(null);
+  };
+
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden text-white" onMouseMove={onDragMove} onTouchMove={onDragMove}>
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 border-b border-purple-500/20">
@@ -330,7 +340,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
       <div className="h-[70%] relative w-full">
         {gameState.players.map((p, i) => {
             const pos = [ "bottom-6 left-1/2 -translate-x-1/2", "top-1/2 right-2 -translate-y-1/2", "top-6 left-1/2 -translate-x-1/2", "top-1/2 left-2 -translate-y-1/2" ][i];
-            return <Avatar key={p.id} player={p} pos={pos} active={gameState.turnIndex === i} isWinner={clearingTrick?.winnerId === i} gameType="CALLBREAK" phase={gameState.phase} />;
+            return <Avatar key={p.id} player={p} pos={pos} active={gameState.turnIndex === i} isWinner={clearingTrick?.winnerId === i} gameType="CALLBREAK" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(i)} />;
         })}
 
         {/* TRICK AREA: Refined Symmetric Cross Formation */}
@@ -374,7 +384,6 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
       <div className="h-[20%] w-full relative flex flex-col items-center justify-end pb-[max(1rem,var(--safe-bottom))] z-40 bg-gradient-to-t from-black to-transparent overflow-visible">
         <div className="relative w-full flex-1">
            {handLayout.map((item, idx) => (
-              // Added event 'e' to the onDragStart call to match the function signature.
               <div key={item.card.id} onMouseDown={(e) => onDragStart(e, item.card.id)} onTouchStart={(e) => onDragStart(e, item.card.id)} onMouseUp={() => onDragEnd(item.card)} onTouchEnd={() => onDragEnd(item.card)}
                 className={`absolute card-fan-item animate-deal cursor-grab ${dragInfo?.id === item.card.id ? 'z-[500]' : ''}`}
                 style={{ transform: `translate3d(${item.x}px, ${Math.pow(idx - (handLayout.length-1)/2, 2) * 0.45 + (dragInfo?.id === item.card.id ? dragInfo.currentY - dragInfo.startY : 0)}px, 0) rotate(${(idx - (handLayout.length-1)/2)*1.5}deg) scale(${dragInfo?.id === item.card.id ? 1.15 : (gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !item.isPlayable ? 0.95 : 1)})`, zIndex: 100 + idx }}
@@ -394,13 +403,25 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
 
       {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
       {showScorecard && <CallbreakScorecardModal history={gameState.callbreakHistory || []} players={gameState.players} onClose={() => setShowScorecard(false)} />}
+      {editingAvatarPlayerId !== null && (
+        <AvatarSelectionModal 
+          currentAvatar={gameState.players[editingAvatarPlayerId].avatar} 
+          onSelect={updateAvatar} 
+          onClose={() => setEditingAvatarPlayerId(null)} 
+        />
+      )}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "SERIES FINISHED" : "ROUND COMPLETE"} subtitle="Cumulative Scores">
             <div className="w-full space-y-3 mb-8 max-h-[40vh] overflow-y-auto">
                {gameState.players.map(p => (
                  <div key={p.id} className="flex justify-between items-center bg-purple-900/20 p-4 rounded-3xl border border-purple-500/20">
-                    <div className="flex items-center gap-3"><span className="text-3xl">{p.avatar}</span><div className="text-left leading-none"><span className="font-black text-sm uppercase">{p.name}</span><br/><span className="text-[8px] opacity-40 font-bold uppercase">Tricks: {p.tricksWon}/{p.bid}</span></div></div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center bg-white/10">
+                        {p.avatar.startsWith('data:image') ? <img src={p.avatar} className="w-full h-full object-cover" alt="Avatar" /> : <span className="text-3xl">{p.avatar}</span>}
+                      </div>
+                      <div className="text-left leading-none"><span className="font-black text-sm uppercase">{p.name}</span><br/><span className="text-[8px] opacity-40 font-bold uppercase">Tricks: {p.tricksWon}/{p.bid}</span></div>
+                    </div>
                     <div className="text-2xl font-black italic text-yellow-500">{(p.score).toFixed(1)}</div>
                  </div>
                ))}

@@ -1,3 +1,4 @@
+
 {
   "name": "Hearts Pro Mobile",
   "short_name": "Hearts Pro",
@@ -22,5 +23,7 @@
   "background_color": "#0b2e13",
   "theme_color": "#0b2e13",
   "scope": "/",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "camera"
+  ]
 }

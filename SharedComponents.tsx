@@ -1,5 +1,5 @@
 
-import React, { memo } from 'react';
+import React, { memo, useRef, useState, useCallback } from 'react';
 import { Card, GamePhase, GameType, Player, HistoryItem, SpadesRoundSummary, CallbreakRoundSummary } from './types';
 import { SUIT_COLORS, SUIT_SYMBOLS } from './constants';
 
@@ -40,7 +40,7 @@ export const CardView = memo(({ card, size = 'md', inactive = false, highlighted
   );
 });
 
-export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase }) => {
+export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase, onClick }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase, onClick?: () => void }) => {
   const isSpades = gameType === 'SPADES' || gameType === 'CALLBREAK';
   const isTeamBlue = gameType === 'SPADES' && player.teamId === 0;
   
@@ -52,10 +52,19 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
   const showBiddingStatus = isSpades && phase === 'BIDDING' && active;
   const hasBidAlready = isSpades && phase === 'BIDDING' && player.bid !== undefined;
 
+  const isCustomImage = player.avatar.startsWith('data:image');
+
   return (
-    <div className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'opacity-100 scale-110' : 'opacity-80 scale-95'} ${isWinner ? 'scale-125' : ''}`}>
-      <div className={`relative w-16 h-16 rounded-3xl flex items-center justify-center text-4xl shadow-2xl border-4 transition-all duration-500 backdrop-blur-md ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : `${teamBg} ${teamColor} ${teamGlow}`} ${active ? 'ring-4 ring-yellow-400/50' : ''}`}>
-        {player.avatar}
+    <div 
+      className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'opacity-100 scale-110' : 'opacity-80 scale-95'} ${isWinner ? 'scale-125' : ''} cursor-pointer active:scale-105`}
+      onClick={onClick}
+    >
+      <div className={`relative w-16 h-16 rounded-3xl flex items-center justify-center text-4xl shadow-2xl border-4 transition-all duration-500 backdrop-blur-md overflow-hidden ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : `${teamBg} ${teamColor} ${teamGlow}`} ${active ? 'ring-4 ring-yellow-400/50' : ''}`}>
+        {isCustomImage ? (
+          <img src={player.avatar} className="w-full h-full object-cover" alt="Avatar" />
+        ) : (
+          player.avatar
+        )}
         
         {showBiddingStatus && !hasBidAlready && (
            <div className="absolute -bottom-2 bg-yellow-400 text-black px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest animate-pulse border border-black/20 shadow-lg whitespace-nowrap">Thinking...</div>
@@ -79,6 +88,85 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
           </div>
         </div>
         {gameType !== 'CALLBREAK' && <span className="text-[10px] font-black uppercase text-white/50 tracking-[0.15em] mt-1 drop-shadow-md">{player.name}</span>}
+      </div>
+    </div>
+  );
+});
+
+const PREDEFINED_AVATARS = ['👤', '🧔', '👩', '👱', '👴', '👵', '🤴', '👸', '🐱', '🐶', '🦊', '🐯', '🐸', '🤖', '👻', '👽', '🤠', '🤡', '🦄', '🐲'];
+
+export const AvatarSelectionModal = memo(({ currentAvatar, onSelect, onClose }: { currentAvatar: string, onSelect: (avatar: string) => void, onClose: () => void }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCustomPhoto = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const size = 128;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const aspect = img.width / img.height;
+          let drawWidth, drawHeight, offsetX, offsetY;
+          if (aspect > 1) {
+            drawHeight = size;
+            drawWidth = size * aspect;
+            offsetX = -(drawWidth - size) / 2;
+            offsetY = 0;
+          } else {
+            drawWidth = size;
+            drawHeight = size / aspect;
+            offsetY = -(drawHeight - size) / 2;
+            offsetX = 0;
+          }
+          ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+          onSelect(canvas.toDataURL('image/jpeg', 0.8));
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  }, [onSelect]);
+
+  return (
+    <div className="absolute inset-0 z-[300] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4 animate-fadeIn">
+      <div className="bg-neutral-900 border border-white/10 rounded-[2.5rem] shadow-2xl flex flex-col w-[90%] max-w-sm animate-play overflow-hidden">
+        <div className="p-6 border-b border-white/10 flex justify-between items-center">
+          <div>
+            <h2 className="text-2xl font-black italic text-yellow-500 uppercase tracking-tighter">Edit Avatar</h2>
+            <p className="text-[8px] text-white/30 uppercase tracking-[0.3em]">Choose your identity</p>
+          </div>
+          <button onClick={onClose} className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center text-xl active:scale-90 transition-transform">✕</button>
+        </div>
+
+        <div className="p-6 grid grid-cols-5 gap-3">
+          {PREDEFINED_AVATARS.map(icon => (
+            <button 
+              key={icon} 
+              onClick={() => onSelect(icon)}
+              className={`aspect-square rounded-2xl flex items-center justify-center text-2xl transition-all ${currentAvatar === icon ? 'bg-yellow-500 border-2 border-white scale-110 shadow-lg' : 'bg-white/5 hover:bg-white/10 border border-white/5 active:scale-95'}`}
+            >
+              {icon}
+            </button>
+          ))}
+        </div>
+
+        <div className="px-6 pb-8 flex flex-col gap-3">
+          <input type="file" ref={fileInputRef} onChange={handleCustomPhoto} accept="image/*" className="hidden" />
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full h-14 bg-indigo-600 rounded-2xl font-black text-xs uppercase tracking-widest border border-indigo-400 shadow-xl active:translate-y-1 transition-all flex items-center justify-center gap-2"
+          >
+            <span>📸</span> Choose Custom Photo
+          </button>
+          <p className="text-center text-[8px] text-white/20 uppercase font-bold tracking-widest">Select an icon or upload your own</p>
+        </div>
       </div>
     </div>
   );
@@ -108,7 +196,7 @@ export const HistoryModal = memo(({ history, players, onClose }: { history: Hist
                 <div className="flex justify-between items-center mb-3">
                   <span className="text-[9px] font-black text-white/40 uppercase tracking-[0.2em]">Trick {idx + 1}</span>
                   <span className="text-[9px] font-black text-yellow-500/80 uppercase tracking-widest">
-                    Won by {players[item.winnerId].avatar}
+                    Won by {players[item.winnerId].avatar.length > 4 ? 'User' : players[item.winnerId].avatar}
                   </span>
                 </div>
                 <div className="grid grid-cols-4 gap-2">
@@ -150,7 +238,7 @@ export const CallbreakScorecardModal = memo(({ history, players, onClose }: { hi
             <thead>
               <tr className="text-[9px] font-black text-white/40 uppercase tracking-widest border-b border-white/5">
                 <th className="py-4 px-2 text-left">Round</th>
-                {players.map(p => <th key={p.id} className="py-4 px-2">{p.avatar}<br/><span className="text-[7px] text-white/20">{p.name}</span></th>)}
+                {players.map(p => <th key={p.id} className="py-4 px-2">{p.avatar.length > 4 ? '👤' : p.avatar}<br/><span className="text-[7px] text-white/20">{p.name}</span></th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
