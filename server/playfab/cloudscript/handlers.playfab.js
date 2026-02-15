@@ -4,7 +4,8 @@
 var STARTING_COINS = 1000;
 var ENTRY_FEE = 50;
 var REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
-var TIMEOUT_MS = 5000;
+var HUMAN_TIMEOUT_MS = 10000;
+var BOT_TIMEOUT_MS = 1400;
 var DEFAULT_REGION = 'US';
 var DEFAULT_CURRENCY_ID = 'CO';
 var QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
@@ -123,9 +124,16 @@ function newMatch(gameType, playerName, playerId) {
     scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
     roundNumber: 1,
     status: 'WAITING',
-    turnDeadlineMs: now + TIMEOUT_MS,
+    turnDeadlineMs: now + HUMAN_TIMEOUT_MS,
     serverTimeMs: now
   };
+}
+
+function getTurnTimeout(match, seat) {
+  var p = match.players[seat];
+  if (!p) return HUMAN_TIMEOUT_MS;
+  var isBotTurn = !!p.isBot || !!p.disconnected;
+  return isBotTurn ? BOT_TIMEOUT_MS : HUMAN_TIMEOUT_MS;
 }
 
 function buildDeck(gameType) {
@@ -188,7 +196,7 @@ function startMatchIfReady(match) {
   match.leadSuit = null;
   match.turnIndex = 0;
   match.trickLeaderIndex = 0;
-  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
   match.status = 'PLAYING';
   return true;
 }
@@ -258,7 +266,7 @@ function applyMove(match, seat, cardId, allowFallback) {
 
   if (match.currentTrick.length < 4) {
     match.turnIndex = (seat + 1) % 4;
-    match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+    match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
     return;
   }
 
@@ -273,7 +281,7 @@ function applyMove(match, seat, cardId, allowFallback) {
   match.leadSuit = null;
   match.turnIndex = winner;
   match.trickLeaderIndex = winner;
-  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
 
   if ((match.hands[0] || []).length === 0) {
     match.status = 'COMPLETED';
@@ -466,7 +474,12 @@ handlers.submitMove = function(args, context) {
 
 handlers.getState = function(args, context) {
   var match = getMatch(args.matchId, context);
-  var changed = runServerTurn(match);
+  var changed = false;
+  var guard = 0;
+  while (runServerTurn(match) && guard < 4) {
+    changed = true;
+    guard += 1;
+  }
   if (changed) {
     bump(match);
     saveMatch(match, context);

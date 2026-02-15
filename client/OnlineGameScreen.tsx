@@ -12,6 +12,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<string>('');
+  const [message, setMessage] = useState<string>('');
   const [renderTrick, setRenderTrick] = useState<Array<{ seat: number; card: any }>>([]);
   const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
   const clearTimerRef = useRef<number | null>(null);
@@ -45,10 +46,15 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       } catch (e) {
         setError((e as Error).message);
       }
-    }, 500);
+    }, 250);
 
     return () => clearInterval(timer);
   }, [state]);
+
+  const showMessage = (text: string, ms = 1500) => {
+    setMessage(text);
+    window.setTimeout(() => setMessage((prev) => (prev === text ? '' : prev)), ms);
+  };
 
   useEffect(() => {
     return () => {
@@ -114,23 +120,57 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   const handLayout = useMemo(() => {
     if (!hand.length) return [] as Array<{ card: any; x: number }>;
-    const containerWidth = Math.min(typeof window !== 'undefined' ? window.innerWidth : 420, 430);
-    const weights = hand.map((_, idx) => 1 + Math.max(0, 1 - Math.abs(idx - (hand.length - 1) / 2) / (hand.length || 1)));
-    const sumWeights = weights.reduce((s, w) => s + w, 0);
-    const gapPerWeight = hand.length > 1 ? Math.max(0, containerWidth - 120) / sumWeights : 0;
-    let currentX = (containerWidth - (sumWeights * gapPerWeight + 88)) / 2 + 16;
+    const containerWidth = Math.min(typeof window !== 'undefined' ? window.innerWidth : 420, 440);
+    const cardWidth = 88;
+    const available = Math.max(100, containerWidth - 48);
+    const step = hand.length > 1 ? Math.max(18, (available - cardWidth) / (hand.length - 1)) : 0;
+    const total = cardWidth + step * (hand.length - 1);
+    let currentX = Math.max(8, (containerWidth - total) / 2);
     return hand.map((card, idx) => {
       const x = currentX;
-      currentX += weights[idx] * gapPerWeight;
+      currentX += step;
       return { card, x };
     });
   }, [hand]);
 
+  const playableIds = useMemo(() => {
+    if (!state || state.status !== 'PLAYING') return new Set<string>();
+    const currentHand = ((state as any).hands || {})[selfSeat] || [];
+    if (!Array.isArray(currentHand) || currentHand.length === 0) return new Set<string>();
+    const leadSuit = (state as any).leadSuit || null;
+    if (!leadSuit) return new Set(currentHand.map((c: any) => c.id));
+
+    const hasLeadSuit = currentHand.some((c: any) => c.suit === leadSuit);
+    if (hasLeadSuit) return new Set(currentHand.filter((c: any) => c.suit === leadSuit).map((c: any) => c.id));
+
+    if (state.gameType === 'CALLBREAK') {
+      const hasSpades = currentHand.some((c: any) => c.suit === 'SPADES');
+      if (hasSpades) return new Set(currentHand.filter((c: any) => c.suit === 'SPADES').map((c: any) => c.id));
+    }
+
+    return new Set(currentHand.map((c: any) => c.id));
+  }, [state, selfSeat]);
+
   const submit = async (cardId: string) => {
-    if (!state || state.turnIndex !== selfSeat || state.status !== 'PLAYING') return;
+    if (!state) return;
+    if (state.status === 'WAITING') {
+      showMessage('Waiting for second player...');
+      return;
+    }
+    if (state.status !== 'PLAYING') return;
+    if (state.turnIndex !== selfSeat) {
+      showMessage('Wait for your turn');
+      return;
+    }
+    if (!playableIds.has(cardId)) {
+      const lead = (state as any).leadSuit;
+      showMessage(lead ? `Must follow ${lead}` : 'Invalid move');
+      return;
+    }
     try {
       const next = await serviceRef.current.submitMove(cardId);
       setState({ ...next });
+      setMessage('');
 
       if (next.status === 'COMPLETED') {
         const finished = await serviceRef.current.finish();
@@ -144,6 +184,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         try {
           const next = await serviceRef.current.pollDelta();
           if (next) setState({ ...next });
+          showMessage('State synced, try again', 1200);
           return;
         } catch {}
       }
@@ -175,6 +216,14 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           <TurnTimer deadlineMs={state.turnDeadlineMs} serverTimeMs={state.serverTimeMs} />
         ) : (
           <div className="text-[10px] font-black uppercase text-yellow-300">Waiting...</div>
+        )}
+      </div>
+
+      <div className="absolute top-[12%] left-1/2 -translate-x-1/2 z-[100] w-full flex justify-center pointer-events-none px-6">
+        {message && (
+          <div className="bg-yellow-400 text-black px-5 py-2 rounded-full text-[10px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal">
+            {message}
+          </div>
         )}
       </div>
 
@@ -241,11 +290,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               disabled={state.turnIndex !== selfSeat || state.status !== 'PLAYING'}
               className={`absolute card-fan-item animate-deal ${state.turnIndex === selfSeat ? 'cursor-pointer active:-translate-y-2' : 'opacity-70 cursor-default'}`}
               style={{
-                transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.4}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 2}deg)`,
+                transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.32}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg)`,
                 zIndex: 100 + idx,
               }}
             >
-              <CardView card={item.card} size="lg" />
+              <CardView card={item.card} size="lg" inactive={state.turnIndex === selfSeat && state.status === 'PLAYING' && !playableIds.has(item.card.id)} />
             </button>
           ))}
         </div>
