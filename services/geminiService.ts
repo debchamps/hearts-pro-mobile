@@ -1,8 +1,102 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { Card, Suit, TrickCard, GameSettings } from "../types";
+import { Card, Suit, TrickCard, GameSettings, Language } from "../types";
+import { DEFAULT_TRANSLATIONS } from "./i18n";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+const GAME_CONTEXT = `
+  Context for the Card Games:
+  1. Hearts: A trick-taking game where points are bad. 'Hearts' are worth 1 point each, and the 'Queen of Spades' is worth 13. 'Shooting the Moon' means taking all point cards to give opponents 26 points.
+  2. Spades: A partnership game where 'Spades' are always the trump suit. Players 'Bid' on how many tricks they will win. A 'Nil' bid means zero tricks. 'Bags' are overtricks that can lead to a penalty.
+  3. Callbreak: A popular South Asian game similar to Spades but played individually. The 'Spade' is the permanent trump. Players must 'Overtrump' (play a higher trump) if possible.
+`;
+
+/**
+ * Recursively generates a Gemini responseSchema from a source object.
+ * This satisfies the requirement that Type.OBJECT must have non-empty properties.
+ */
+function generateSchemaFromObject(obj: any): any {
+  if (typeof obj !== 'object' || obj === null) {
+    return { type: Type.STRING };
+  }
+
+  const properties: any = {};
+  const required: string[] = [];
+
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      if (typeof obj[key] === 'object' && obj[key] !== null) {
+        properties[key] = generateSchemaFromObject(obj[key]);
+      } else {
+        properties[key] = { type: Type.STRING };
+      }
+      required.push(key);
+    }
+  }
+
+  return {
+    type: Type.OBJECT,
+    properties,
+    required
+  };
+}
+
+export async function translateAll(sourceData: any): Promise<Record<Language, any>> {
+  const targetLanguages: Language[] = ['hi', 'bn', 'ar', 'es', 'pt'];
+  
+  try {
+    const prompt = `
+      ${GAME_CONTEXT}
+      
+      Task: Translate the following English i18n JSON into:
+      - Hindi (hi)
+      - Bengali (bn)
+      - Arabic (ar) - Ensure RTL compatibility in wording
+      - Spanish (es)
+      - Portuguese (pt)
+
+      Rules:
+      - Maintain the EXACT JSON structure of the source.
+      - Use natural, culturally appropriate gaming terminology. 
+      - Do NOT translate terms like "Hearts", "Spades", or "Clubs" literally if the local gaming community uses the English terms or specific local names (e.g., 'Hukum' in Hindi for Spades).
+      - Keep placeholders like {suit} or {count} exactly as they are.
+
+      Source JSON:
+      ${JSON.stringify(sourceData, null, 2)}
+    `;
+
+    // Generate a schema that mirrors the actual keys in the source dictionary
+    const languageSpecificSchema = generateSchemaFromObject(sourceData);
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            hi: languageSpecificSchema,
+            bn: languageSpecificSchema,
+            ar: languageSpecificSchema,
+            es: languageSpecificSchema,
+            pt: languageSpecificSchema
+          },
+          required: targetLanguages,
+        },
+      },
+    });
+
+    // Directly access the .text property from the response
+    const translatedData = JSON.parse(response.text || '{}');
+    // Ensure English is included in the returned set
+    return { ...translatedData, en: sourceData };
+  } catch (error) {
+    console.error("Gemini Translation failed:", error);
+    throw error;
+  }
+}
 
 export async function getBestMove(
   hand: Card[],
@@ -13,27 +107,17 @@ export async function getBestMove(
   playerName: string,
   settings: GameSettings = { shootTheMoon: true, noPassing: false, jackOfDiamonds: false, targetScore: 100 }
 ): Promise<string> {
-  
   try {
     const prompt = `
-      You are playing a professional game of Hearts. 
+      ${GAME_CONTEXT}
+      Current Game: Hearts
       Player: ${playerName}
-      Your Hand: ${hand.map(c => `${c.rank} of ${c.suit}`).join(', ')}
-      Current Trick: ${currentTrick.length === 0 ? 'Leading the trick' : currentTrick.map(t => `Player ${t.playerId}: ${t.card.rank} of ${t.card.suit}`).join(', ')}
+      Hand: ${hand.map(c => `${c.rank} of ${c.suit}`).join(', ')}
+      Current Trick: ${currentTrick.length === 0 ? 'Leading' : currentTrick.map(t => `${t.card.rank} of ${t.card.suit}`).join(', ')}
       Lead Suit: ${leadSuit || 'None'}
       Hearts Broken: ${heartsBroken}
-      Is First Trick: ${isFirstTrick}
-      Jack of Diamonds Points Enabled: ${settings.jackOfDiamonds}
       
-      Strategy: 
-      - If you have 2 of Clubs and it is the first trick, you MUST play it.
-      - Follow suit if possible.
-      - If you can't follow suit, discard high cards or point cards (Hearts or Queen of Spades).
-      - If you are leading, avoid leading high cards unless you want to draw out the Queen of Spades.
-      - Decide whether to 'Shoot the Moon' (try to get all 26 points) if your hand is extremely strong.
-      
-      Respond with ONLY the JSON object of the card ID you choose.
-      The card ID format is rank-suit (e.g., '2-CLUBS', 'Q-SPADES').
+      Choose the most strategic card ID to play (e.g., 'Q-SPADES'). Return only JSON.
     `;
 
     const response = await ai.models.generateContent({
@@ -44,10 +128,7 @@ export async function getBestMove(
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            cardId: {
-              type: Type.STRING,
-              description: "The ID of the card to play",
-            }
+            cardId: { type: Type.STRING }
           },
           required: ["cardId"],
         },
@@ -55,30 +136,9 @@ export async function getBestMove(
     });
 
     const result = JSON.parse(response.text || '{}');
-    const selectedCardId = result.cardId;
-    if (selectedCardId && hand.some(c => c.id === selectedCardId)) return selectedCardId;
-  } catch (error) {
-    console.error("Gemini AI failed, using fallback:", error);
-  }
+    if (result.cardId && hand.some(c => c.id === result.cardId)) return result.cardId;
+  } catch (error) {}
 
-  // FALLBACK RULE-BASED LOGIC
-  const validHand = hand.filter(c => !!c);
-  const playable = validHand.filter(card => {
-    if (!leadSuit) {
-      if (isFirstTrick) return card.id === '2-CLUBS';
-      if (!heartsBroken && card.suit === 'HEARTS') return validHand.every(c => c.suit === 'HEARTS');
-      return true;
-    }
-    return validHand.some(c => c.suit === leadSuit) ? card.suit === leadSuit : true;
-  });
-
-  const candidates = playable.length > 0 ? playable : validHand;
-  
-  // Basic heuristic fallback:
-  if (leadSuit) {
-    const sorted = [...candidates].sort((a,b) => a.value - b.value);
-    // If trick has points, play lowest card.
-    return sorted[0].id;
-  }
-  return candidates[0].id;
+  // Basic fallback logic
+  return hand[0]?.id || '';
 }

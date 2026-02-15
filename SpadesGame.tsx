@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { GameState, Card, GamePhase, GameSettings, Player, HistoryItem, SpadesRoundSummary } from './types';
+import { GameState, Card, GamePhase, GameSettings, Player, HistoryItem, SpadesRoundSummary, PlayerEmotion } from './types';
 import { createDeck, shuffle } from './constants';
 import { getSpadesBid, getSpadesMove } from './services/spadesAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, ScorecardModal, AvatarSelectionModal } from './SharedComponents';
@@ -33,7 +33,7 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
     phase: 'DEALING',
     roundNumber: 1,
     passingCards: [],
-    settings: { targetScore: 500, shootTheMoon: false, noPassing: true, jackOfDiamonds: false },
+    settings: { targetScore: 500, shootTheMoon: false, noPassing: true, jackOfDiamonds: false, enableEmojis: true },
     teamScores: [0, 0],
     teamBags: [0, 0],
     trickHistory: [],
@@ -63,12 +63,19 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
     }
   }, [gameState]);
 
-  useEffect(() => {
-    if (message) {
-      const timer = setTimeout(() => setMessage(""), 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [message]);
+  const triggerEmoji = useCallback((playerId: number, emotion: PlayerEmotion) => {
+    if (!gameState.settings.enableEmojis) return;
+    setGameState(prev => ({
+      ...prev,
+      players: prev.players.map(p => p.id === playerId ? { ...p, emotion } : p)
+    }));
+    setTimeout(() => {
+      setGameState(prev => ({
+        ...prev,
+        players: prev.players.map(p => p.id === playerId ? { ...p, emotion: null } : p)
+      }));
+    }, 2500);
+  }, [gameState.settings.enableEmojis]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
     const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -208,24 +215,33 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
       setTimeout(() => {
-        let winner = gameState.currentTrick[0];
+        let winnerCard = gameState.currentTrick[0];
         for (let i = 1; i < 4; i++) {
           const curr = gameState.currentTrick[i];
-          if (curr.card.suit === winner.card.suit) { if (curr.card.value > winner.card.value) winner = curr; }
-          else if (curr.card.suit === 'SPADES') { if (winner.card.suit !== 'SPADES' || curr.card.value > winner.card.value) winner = curr; }
+          if (curr.card.suit === winnerCard.card.suit) { if (curr.card.value > winnerCard.card.value) winnerCard = curr; }
+          else if (curr.card.suit === 'SPADES') { if (winnerCard.card.suit !== 'SPADES' || curr.card.value > winnerCard.card.value) winnerCard = curr; }
         }
-        setClearingTrick({ winnerId: winner.playerId });
+        
+        setClearingTrick({ winnerId: winnerCard.playerId });
         if (soundEnabled) playSound(SOUNDS.CLEAR, 0.4);
+
+        // Emoji logic
+        const winnerObj = gameState.players[winnerCard.playerId];
+        if (winnerObj.bid !== undefined && (winnerObj.tricksWon || 0) >= winnerObj.bid && winnerObj.bid !== 0) {
+           triggerEmoji(winnerCard.playerId, 'CRYING'); // Bagging
+        } else if (winnerCard.card.suit === 'SPADES' && winnerCard.card.value >= 12) {
+           triggerEmoji(winnerCard.playerId, 'HAPPY');
+        }
 
         const historyItem: HistoryItem = {
           trick: [...gameState.currentTrick],
-          winnerId: winner.playerId,
+          winnerId: winnerCard.playerId,
           leadSuit: gameState.leadSuit
         };
 
         setTimeout(() => {
           setGameState(prev => {
-            const newPlayers = prev.players.map(p => p.id === winner.playerId ? { ...p, tricksWon: (p.tricksWon || 0) + 1 } : p);
+            const newPlayers = prev.players.map(p => p.id === winnerCard.playerId ? { ...p, tricksWon: (p.tricksWon || 0) + 1 } : p);
             const newHistory = [...prev.trickHistory, historyItem];
 
             if (newPlayers[0].hand.length === 0) {
@@ -240,6 +256,7 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
                     const success = (p.tricksWon || 0) === 0;
                     roundScore += success ? 100 : -100;
                     nilResults.push({ playerId: p.id, success });
+                    triggerEmoji(p.id, success ? 'HAPPY' : 'CRYING');
                   } else {
                     standardBid += (p.bid || 0);
                   }
@@ -249,8 +266,10 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
                     if (remainingTricks >= standardBid) {
                         roundScore += (standardBid * 10) + (remainingTricks - standardBid);
                         bagsGained = (remainingTricks - standardBid);
+                        [playerA, playerB].forEach(p => { if (p.bid !== 0) triggerEmoji(p.id, 'HAPPY'); });
                     } else {
                         roundScore -= (standardBid * 10);
+                        [playerA, playerB].forEach(p => { if (p.bid !== 0) triggerEmoji(p.id, 'CRYING'); });
                     }
                 }
                 let finalBags = currentBags + bagsGained;
@@ -259,6 +278,7 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
                     roundScore -= 100;
                     finalBags -= 10;
                     bagPenalty = true;
+                    [playerA, playerB].forEach(p => triggerEmoji(p.id, 'CRYING'));
                 }
                 return { bid: (playerA.bid || 0) + (playerB.bid || 0), tricks: (playerA.tricksWon || 0) + (playerB.tricksWon || 0), scoreChange: roundScore, bags: bagsGained, finalBags, nilResults, bagPenalty };
               };
@@ -292,13 +312,13 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
                 spadesHistory: [...(prev.spadesHistory || []), summary]
               };
             }
-            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId, trickHistory: newHistory };
+            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winnerCard.playerId, trickHistory: newHistory };
           });
           setClearingTrick(null);
         }, 850);
       }, 800);
     }
-  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit]);
+  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit, triggerEmoji]);
 
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
@@ -356,11 +376,8 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <div className="flex gap-2">
           <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
-          <button onClick={() => leaderboardService.openLeaderboard('SPADES')} className="bg-white/10 rounded-xl px-2 h-10 flex items-center gap-1.5 shadow-lg border border-white/5 active:scale-95 transition-all">
-            <span className="text-xl">🏆</span>
-            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-tighter">
-              {currentRank ? `#${currentRank}` : 'RANK'}
-            </span>
+          <button onClick={() => setGameState(p => ({ ...p, settings: { ...p.settings, enableEmojis: !p.settings.enableEmojis } }))} className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl shadow-lg border transition-all ${gameState.settings.enableEmojis ? 'bg-green-600 border-green-400' : 'bg-gray-700 border-gray-500'}`}>
+            {gameState.settings.enableEmojis ? '😊' : '🚫'}
           </button>
           <button onClick={() => setShowHowToPlay(true)} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">?</button>
         </div>
@@ -389,38 +406,34 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
       </div>
 
       <div className="h-[70%] relative w-full">
-        <Avatar player={gameState.players[2]} pos="top-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 2} isWinner={clearingTrick?.winnerId === 2} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(2)} />
-        <Avatar player={gameState.players[3]} pos="top-1/2 left-2 -translate-y-1/2" active={gameState.turnIndex === 3} isWinner={clearingTrick?.winnerId === 3} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(3)} />
-        <Avatar player={gameState.players[1]} pos="top-1/2 right-2 -translate-y-1/2" active={gameState.turnIndex === 1} isWinner={clearingTrick?.winnerId === 1} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(1)} />
-        <Avatar player={gameState.players[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={gameState.turnIndex === 0} isWinner={clearingTrick?.winnerId === 0} gameType="SPADES" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(0)} />
+        {gameState.players.map((p, i) => {
+            const positions = ["bottom-6 left-1/2 -translate-x-1/2", "top-1/2 right-2 -translate-y-1/2", "top-6 left-1/2 -translate-x-1/2", "top-1/2 left-2 -translate-y-1/2"];
+            return (
+              <Avatar 
+                key={p.id} 
+                player={p} 
+                pos={positions[i]} 
+                active={gameState.turnIndex === i} 
+                isWinner={clearingTrick?.winnerId === i} 
+                gameType="SPADES" 
+                phase={gameState.phase} 
+                onClick={() => setEditingAvatarPlayerId(i)}
+                emojisEnabled={gameState.settings.enableEmojis}
+              />
+            );
+        })}
 
-        {/* TRICK AREA: Refined Symmetric Cross Formation */}
+        {/* TRICK AREA */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const offsets = [
-               { x: 0,   y: 45,  rot: '2deg' },   // P0 (Bottom)
-               { x: 60,  y: 0,   rot: '5deg' },   // P1 (Right)
-               { x: 0,   y: -45, rot: '-3deg' },  // P2 (Top)
-               { x: -60, y: 0,   rot: '-6deg' }   // P3 (Left)
-             ];
+             const offsets = [{x:0,y:45,rot:'2deg'}, {x:60,y:0,rot:'5deg'}, {x:0,y:-45,rot:'-3deg'}, {x:-60,y:0,rot:'-6deg'}];
              const off = offsets[t.playerId];
-             const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
-             const startPos = [
-                { x: 0, y: 350 }, { x: 380, y: 0 }, { x: 0, y: -350 }, { x: -380, y: 0 }
-             ][t.playerId];
+             const winDir = [{x:0,y:500}, {x:400,y:0}, {x:0,y:-500}, {x:-400,y:0}][clearingTrick?.winnerId ?? 0];
+             const startPos = [{x:0,y:350}, {x:400,y:0}, {x:0,y:-350}, {x:-400,y:0}][t.playerId];
 
              return (
                <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} 
-                 style={{ 
-                   '--play-x': `${off.x}px`, 
-                   '--play-y': `${off.y}px`, 
-                   '--play-rot': off.rot, 
-                   '--start-x': `${startPos.x}px`,
-                   '--start-y': `${startPos.y}px`,
-                   '--clear-x': `${winDir.x}px`, 
-                   '--clear-y': `${winDir.y}px`, 
-                   zIndex: 10 + idx 
-                 } as any}>
+                 style={{ '--play-x':`${off.x}px`,'--play-y':`${off.y}px`,'--play-rot':off.rot,'--start-x':`${startPos.x}px`,'--start-y':`${startPos.y}px`,'--clear-x':`${winDir.x}px`,'--clear-y':`${winDir.y}px`,zIndex:10+idx } as any}>
                  <CardView card={t.card} size="md" />
                </div>
              );
@@ -447,32 +460,15 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
            {handLayout.map((item, idx, arr) => {
              const { card, x: tx, isPlayable } = item;
              const centerIdx = (arr.length - 1) / 2;
-             const diffFromCenter = idx - centerIdx;
-             const rot = diffFromCenter * 1.5; 
-             const ty = Math.pow(diffFromCenter, 2) * 0.45;
+             const ty = Math.pow(idx - centerIdx, 2) * 0.45;
              const isDragging = dragInfo?.id === card.id;
-             const dragOffset = isDragging ? dragInfo.currentY - dragInfo.startY : 0;
              const isDimmed = gameState.phase === 'PLAYING' && gameState.turnIndex === 0 && !isPlayable;
-             let finalTx = tx;
-             let finalTy = ty; 
-             let finalRot = rot;
-             let finalZIndex = 100 + idx;
              return (
                 <div key={card.id} onMouseDown={(e) => onDragStart(e, card.id)} onTouchStart={(e) => onDragStart(e, card.id)} onMouseUp={() => onDragEnd(card)} onTouchEnd={() => onDragEnd(card)}
                   className={`absolute card-fan-item animate-deal cursor-grab ${isDragging ? 'z-[500]' : ''}`}
-                  style={{ 
-                    transform: `translate3d(${finalTx}px, ${finalTy + dragOffset}px, 0) rotate(${finalRot}deg) scale(${isDragging ? 1.15 : (isDimmed ? 0.95 : 1)})`, 
-                    zIndex: isDragging ? 500 : finalZIndex, 
-                    animationDelay: `${idx * 0.015}s` 
-                  }}
+                  style={{ transform: `translate3d(${tx}px, ${ty + (isDragging ? dragInfo.currentY - dragInfo.startY : 0)}px, 0) rotate(${(idx-centerIdx)*1.5}deg) scale(${isDragging?1.15:(isDimmed?0.95:1)})`, zIndex: isDragging?500:100+idx, animationDelay: `${idx*0.015}s` }}
                 >
-                  <CardView 
-                    card={card} 
-                    size="lg" 
-                    highlighted={isDragging && Math.abs(dragOffset) >= 50} 
-                    hint={hintCardId === card.id} 
-                    inactive={isDimmed}
-                  />
+                  <CardView card={card} size="lg" highlighted={isDragging && Math.abs(dragInfo.currentY-dragInfo.startY)>=50} hint={hintCardId === card.id} inactive={isDimmed} />
                 </div>
              );
            })}
@@ -482,13 +478,7 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled 
       {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
       {showHowToPlay && <HowToPlayModal gameType="SPADES" onClose={() => setShowHowToPlay(false)} />}
       {showScorecard && <ScorecardModal history={gameState.spadesHistory || []} currentScores={gameState.teamScores} currentBags={gameState.teamBags} onClose={() => setShowScorecard(false)} />}
-      {editingAvatarPlayerId !== null && (
-        <AvatarSelectionModal 
-          currentAvatar={gameState.players[editingAvatarPlayerId].avatar} 
-          onSelect={updateAvatar} 
-          onClose={() => setEditingAvatarPlayerId(null)} 
-        />
-      )}
+      {editingAvatarPlayerId !== null && <AvatarSelectionModal currentAvatar={gameState.players[editingAvatarPlayerId].avatar} onSelect={updateAvatar} onClose={() => setEditingAvatarPlayerId(null)} />}
 
       {(gameState.phase === 'ROUND_END' || gameState.phase === 'GAME_OVER') && (
         <Overlay title={gameState.phase === 'GAME_OVER' ? "FINAL SCORES" : "ROUND END"} subtitle="Standings Update">

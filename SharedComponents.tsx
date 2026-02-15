@@ -1,6 +1,6 @@
 
 import React, { memo, useRef, useState, useCallback } from 'react';
-import { Card, GamePhase, GameType, Player, HistoryItem, SpadesRoundSummary, CallbreakRoundSummary } from './types';
+import { Card, GamePhase, GameType, Player, HistoryItem, SpadesRoundSummary, CallbreakRoundSummary, PlayerEmotion } from './types';
 import { SUIT_COLORS, SUIT_SYMBOLS } from './constants';
 
 export const Overlay = memo(({ title, subtitle, children, fullWidth = false }: { title: string, subtitle: string, children?: React.ReactNode, fullWidth?: boolean }) => (
@@ -40,7 +40,7 @@ export const CardView = memo(({ card, size = 'md', inactive = false, highlighted
   );
 });
 
-export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase, onClick }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase, onClick?: () => void }) => {
+export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase, onClick, emojisEnabled = true }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase, onClick?: () => void, emojisEnabled?: boolean }) => {
   const isSpades = gameType === 'SPADES' || gameType === 'CALLBREAK';
   const isTeamBlue = gameType === 'SPADES' && player.teamId === 0;
   
@@ -59,22 +59,33 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
       className={`absolute ${pos} flex flex-col items-center transition-all duration-500 z-10 ${active ? 'opacity-100 scale-110' : 'opacity-80 scale-95'} ${isWinner ? 'scale-125' : ''} cursor-pointer active:scale-105`}
       onClick={onClick}
     >
-      <div className={`relative w-16 h-16 rounded-3xl flex items-center justify-center text-4xl shadow-2xl border-4 transition-all duration-500 backdrop-blur-md overflow-hidden ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : `${teamBg} ${teamColor} ${teamGlow}`} ${active ? 'ring-4 ring-yellow-400/50' : ''}`}>
-        {isCustomImage ? (
-          <img src={player.avatar} className="w-full h-full object-cover" alt="Avatar" />
-        ) : (
-          player.avatar
-        )}
-        
-        {showBiddingStatus && !hasBidAlready && (
-           <div className="absolute -bottom-2 bg-yellow-400 text-black px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest animate-pulse border border-black/20 shadow-lg whitespace-nowrap">Thinking...</div>
-        )}
+      {/* Emotion Emoji Pop-up */}
+      {emojisEnabled && player.emotion && (
+        <div key={`${player.id}-${player.emotion}-${Date.now()}`} className="absolute -top-12 left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-emoji">
+          <div className="text-4xl drop-shadow-2xl filter brightness-110">
+            {player.emotion === 'HAPPY' ? '😊' : '😢'}
+          </div>
+        </div>
+      )}
+
+      <div className="relative">
+        <div className={`relative w-16 h-16 rounded-3xl flex items-center justify-center text-4xl shadow-2xl border-4 transition-all duration-500 backdrop-blur-md overflow-hidden ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : `${teamBg} ${teamColor} ${teamGlow}`} ${active ? 'ring-4 ring-yellow-400/50' : ''}`}>
+          {isCustomImage ? (
+            <img src={player.avatar} className="w-full h-full object-cover" alt="Avatar" />
+          ) : (
+            player.avatar
+          )}
+          
+          {showBiddingStatus && !hasBidAlready && (
+            <div className="absolute -bottom-2 bg-yellow-400 text-black px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest animate-pulse border border-black/20 shadow-lg whitespace-nowrap">Thinking...</div>
+          )}
+        </div>
         
         {isSpades && player.bid !== undefined && (
-           <div className={`absolute -right-3 -bottom-3 ${badgeColor} text-white w-10 h-10 rounded-full flex flex-col items-center justify-center border-2 border-white shadow-2xl animate-deal transform rotate-12 z-30`}>
+          <div className={`absolute -right-3 -bottom-3 ${badgeColor} text-white w-10 h-10 rounded-full flex flex-col items-center justify-center border-2 border-white shadow-2xl animate-deal transform rotate-12 z-30`}>
               <span className="text-[7px] font-black uppercase leading-none opacity-60">BID</span>
               <span className="text-lg font-black leading-none">{player.bid}</span>
-           </div>
+          </div>
         )}
       </div>
       

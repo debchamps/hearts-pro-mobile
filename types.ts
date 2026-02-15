@@ -11,14 +11,19 @@ export interface Card {
 }
 
 export type GameType = 'HEARTS' | 'SPADES' | 'CALLBREAK';
+export type Language = 'en' | 'hi' | 'bn' | 'ar' | 'es' | 'pt';
 
 export interface GameSettings {
   shootTheMoon: boolean;
   noPassing: boolean;
   jackOfDiamonds: boolean;
   targetScore: number;
-  mandatoryOvertrump?: boolean; // For Callbreak
+  mandatoryOvertrump?: boolean;
+  enableEmojis?: boolean;
+  language?: Language;
 }
+
+export type PlayerEmotion = 'HAPPY' | 'CRYING';
 
 export interface Player {
   id: number;
@@ -30,7 +35,8 @@ export interface Player {
   isHuman: boolean;
   bid?: number;
   tricksWon?: number;
-  teamId?: number; // 0 for Team Blue (0, 2), 1 for Team Red (1, 3)
+  teamId?: number;
+  emotion?: PlayerEmotion | null;
 }
 
 export interface TrickCard {
@@ -91,8 +97,8 @@ export interface GameState {
   roundNumber: number;
   passingCards: string[];
   settings: GameSettings;
-  teamScores: [number, number]; // [Team Blue, Team Red]
-  teamBags: [number, number]; // [Team Blue, Team Red]
+  teamScores: [number, number];
+  teamBags: [number, number];
   trickHistory: HistoryItem[];
   spadesHistory?: SpadesRoundSummary[];
   callbreakHistory?: CallbreakRoundSummary[];

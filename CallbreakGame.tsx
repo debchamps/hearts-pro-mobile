@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { GameState, Card, GamePhase, Player, HistoryItem, CallbreakRoundSummary } from './types';
+import { GameState, Card, GamePhase, Player, HistoryItem, CallbreakRoundSummary, PlayerEmotion } from './types';
 import { createDeck, shuffle } from './constants';
 import { getCallbreakBid, getCallbreakMove } from './services/callbreakAi';
 import { Avatar, CardView, Overlay, HistoryModal, CallbreakScorecardModal, AvatarSelectionModal } from './SharedComponents';
@@ -33,7 +33,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
     phase: 'DEALING',
     roundNumber: 1,
     passingCards: [],
-    settings: { targetScore: 5, shootTheMoon: false, noPassing: true, jackOfDiamonds: false, mandatoryOvertrump: false },
+    settings: { targetScore: 5, shootTheMoon: false, noPassing: true, jackOfDiamonds: false, mandatoryOvertrump: false, enableEmojis: true },
     teamScores: [0, 0],
     teamBags: [0, 0],
     trickHistory: [],
@@ -60,6 +60,20 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
       persistenceService.clearGame();
     }
   }, [gameState]);
+
+  const triggerEmoji = useCallback((playerId: number, emotion: PlayerEmotion) => {
+    if (!gameState.settings.enableEmojis) return;
+    setGameState(prev => ({
+      ...prev,
+      players: prev.players.map(p => p.id === playerId ? { ...p, emotion } : p)
+    }));
+    setTimeout(() => {
+      setGameState(prev => ({
+        ...prev,
+        players: prev.players.map(p => p.id === playerId ? { ...p, emotion: null } : p)
+      }));
+    }, 2500);
+  }, [gameState.settings.enableEmojis]);
 
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
     const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -189,28 +203,40 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
   useEffect(() => {
     if (gameState.currentTrick.length === 4) {
       setTimeout(() => {
-        let winner = gameState.currentTrick[0];
+        let winnerCard = gameState.currentTrick[0];
+        let hadSpadeInTrick = winnerCard.card.suit === 'SPADES';
+
         for (let i = 1; i < 4; i++) {
           const curr = gameState.currentTrick[i];
           const isSpade = curr.card.suit === 'SPADES';
-          const winIsSpade = winner.card.suit === 'SPADES';
-          if ((isSpade && !winIsSpade) || (curr.card.suit === winner.card.suit && curr.card.value > winner.card.value)) {
-            winner = curr;
+          if (isSpade) hadSpadeInTrick = true;
+          const winIsSpade = winnerCard.card.suit === 'SPADES';
+          if ((isSpade && !winIsSpade) || (curr.card.suit === winnerCard.card.suit && curr.card.value > winnerCard.card.value)) {
+            winnerCard = curr;
           }
         }
-        setClearingTrick({ winnerId: winner.playerId });
+        setClearingTrick({ winnerId: winnerCard.playerId });
         if (soundEnabled) playSound(SOUNDS.CLEAR, 0.4);
 
-        const historyItem: HistoryItem = { trick: [...gameState.currentTrick], winnerId: winner.playerId, leadSuit: gameState.leadSuit };
+        // Emoji logic
+        const winnersHighestWasSpade = winnerCard.card.suit === 'SPADES';
+        if (winnersHighestWasSpade && gameState.currentTrick.some(t => t.playerId !== winnerCard.playerId && t.card.suit === 'SPADES')) {
+            triggerEmoji(winnerCard.playerId, 'HAPPY'); // Won overtrump battle
+        } else if (!winnersHighestWasSpade && gameState.currentTrick.some(t => t.card.value >= 13 && t.playerId !== winnerCard.playerId)) {
+            triggerEmoji(winnerCard.playerId, 'HAPPY'); // Won against high cards
+        }
+
+        const historyItem: HistoryItem = { trick: [...gameState.currentTrick], winnerId: winnerCard.playerId, leadSuit: gameState.leadSuit };
 
         setTimeout(() => {
           setGameState(prev => {
-            const newPlayers = prev.players.map(p => p.id === winner.playerId ? { ...p, tricksWon: (p.tricksWon || 0) + 1 } : p);
+            const newPlayers = prev.players.map(p => p.id === winnerCard.playerId ? { ...p, tricksWon: (p.tricksWon || 0) + 1 } : p);
             const newHistory = [...prev.trickHistory, historyItem];
 
             if (newPlayers[0].hand.length === 0) {
               const roundScores = newPlayers.map(p => {
                 const success = (p.tricksWon || 0) >= (p.bid || 0);
+                triggerEmoji(p.id, success ? 'HAPPY' : 'CRYING');
                 const scoreChange = success ? (p.bid || 0) + ((p.tricksWon || 0) - (p.bid || 0)) / 10 : -(p.bid || 0);
                 return { playerId: p.id, bid: p.bid || 0, tricks: p.tricksWon || 0, scoreChange, totalAfterRound: p.score + scoreChange };
               });
@@ -239,13 +265,13 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
                 callbreakHistory: [...(prev.callbreakHistory || []), summary]
               };
             }
-            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winner.playerId, trickHistory: newHistory };
+            return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winnerCard.playerId, trickHistory: newHistory };
           });
           setClearingTrick(null);
         }, 850);
       }, 800);
     }
-  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit]);
+  }, [gameState.currentTrick, soundEnabled, gameState.leadSuit, triggerEmoji]);
 
   const handleHumanPlay = (card: Card) => {
     if (gameState.turnIndex !== 0 || isProcessing || gameState.phase !== 'PLAYING' || clearingTrick) return;
@@ -316,11 +342,8 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 border-b border-purple-500/20">
         <div className="flex gap-2">
             <button onClick={onExit} className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">🏠</button>
-            <button onClick={() => leaderboardService.openLeaderboard('CALLBREAK')} className="bg-white/10 rounded-xl px-2 h-10 flex items-center gap-1.5 shadow-lg border border-white/5 active:scale-95 transition-all">
-                <span className="text-xl">🏆</span>
-                <span className="text-[9px] font-black text-yellow-500 uppercase tracking-tighter">
-                {currentRank ? `#${currentRank}` : 'RANK'}
-                </span>
+            <button onClick={() => setGameState(p => ({ ...p, settings: { ...p.settings, enableEmojis: !p.settings.enableEmojis } }))} className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl shadow-lg border transition-all ${gameState.settings.enableEmojis ? 'bg-green-600 border-green-400' : 'bg-gray-700 border-gray-500'}`}>
+                {gameState.settings.enableEmojis ? '😊' : '🚫'}
             </button>
         </div>
         <div className="flex flex-col items-center">
@@ -340,22 +363,28 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
       <div className="h-[70%] relative w-full">
         {gameState.players.map((p, i) => {
             const pos = [ "bottom-6 left-1/2 -translate-x-1/2", "top-1/2 right-2 -translate-y-1/2", "top-6 left-1/2 -translate-x-1/2", "top-1/2 left-2 -translate-y-1/2" ][i];
-            return <Avatar key={p.id} player={p} pos={pos} active={gameState.turnIndex === i} isWinner={clearingTrick?.winnerId === i} gameType="CALLBREAK" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(i)} />;
+            return <Avatar key={p.id} player={p} pos={pos} active={gameState.turnIndex === i} isWinner={clearingTrick?.winnerId === i} gameType="CALLBREAK" phase={gameState.phase} onClick={() => setEditingAvatarPlayerId(i)} emojisEnabled={gameState.settings.enableEmojis} />;
         })}
 
-        {/* TRICK AREA: Refined Symmetric Cross Formation */}
+        {/* TRICK AREA */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[18rem] h-[18rem] flex items-center justify-center pointer-events-none">
           {gameState.currentTrick.map((t, idx) => {
-             const offsets = [
-               { x: 0,   y: 45,  rot: '2deg' },   // P0 (Bottom)
-               { x: 60,  y: 0,   rot: '5deg' },   // P1 (Right)
-               { x: 0,   y: -45, rot: '-3deg' },  // P2 (Top)
-               { x: -60, y: 0,   rot: '-6deg' }   // P3 (Left)
-             ];
+             const offsets = [{x:0,y:45,rot:'2deg'}, {x:60,y:0,rot:'5deg'}, {x:0,y:-45,rot:'-3deg'}, {x:-60,y:0,rot:'-6deg'}];
              const off = offsets[t.playerId];
-             const winDir = [{ x: 0, y: 500 }, { x: 400, y: 0 }, { x: 0, y: -500 }, { x: -400, y: 0 }][clearingTrick?.winnerId ?? 0];
+             const winDir = [{x:0,y:500}, {x:400,y:0}, {x:0,y:-500}, {x:-400,y:0}][clearingTrick?.winnerId ?? 0];
+             const startPos = [{x:0,y:350}, {x:400,y:0}, {x:0,y:-350}, {x:-400,y:0}][t.playerId];
              return (
-               <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} style={{ '--play-x': `${off.x}px`, '--play-y': `${off.y}px`, '--play-rot': off.rot, '--start-x': '0px', '--start-y': '0px', '--clear-x': `${winDir.x}px`, '--clear-y': `${winDir.y}px`, zIndex: 10 + idx } as any}>
+               <div key={idx} className={`absolute transition-all animate-play ${clearingTrick ? 'animate-clear' : ''}`} 
+                style={{ 
+                  '--play-x': `${off.x}px`, 
+                  '--play-y': `${off.y}px`, 
+                  '--play-rot': off.rot, 
+                  '--start-x': `${startPos.x}px`, 
+                  '--start-y': `${startPos.y}px`, 
+                  '--clear-x': `${winDir.x}px`, 
+                  '--clear-y': `${winDir.y}px`, 
+                  zIndex: 10 + idx 
+                } as any}>
                  <CardView card={t.card} size="md" />
                </div>
              );
@@ -392,13 +421,6 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
               </div>
            ))}
         </div>
-      </div>
-
-      <div className="absolute top-[var(--safe-top)] right-48 z-[60] flex items-center gap-2">
-          <span className="text-[8px] font-black uppercase text-white/40">Overtrump</span>
-          <button onClick={() => setGameState(p => ({ ...p, settings: { ...p.settings, mandatoryOvertrump: !p.settings.mandatoryOvertrump } }))} className={`w-8 h-4 rounded-full relative transition-colors ${gameState.settings.mandatoryOvertrump ? 'bg-green-500' : 'bg-gray-700'}`}>
-              <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${gameState.settings.mandatoryOvertrump ? 'left-4.5' : 'left-0.5'}`} />
-          </button>
       </div>
 
       {showHistory && <HistoryModal history={gameState.trickHistory} players={gameState.players} onClose={() => setShowHistory(false)} />}
