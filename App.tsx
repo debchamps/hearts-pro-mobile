@@ -17,6 +17,7 @@ const INITIAL_PLAYERS: Player[] = [
 export default function App() {
   const [screen, setScreen] = useState<ScreenState>('HOME');
   const [gameType, setGameType] = useState<GameType>('HEARTS');
+  const [gameMode, setGameMode] = useState<'OFFLINE' | 'ONLINE'>('OFFLINE');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [resumedState, setResumedState] = useState<GameState | null>(null);
   const [hasSavedGame, setHasSavedGame] = useState(false);
@@ -34,8 +35,16 @@ export default function App() {
   const handleSelectGame = (type: GameType) => {
     setResumedState(null);
     setGameType(type);
+    setGameMode('OFFLINE');
     setScreen('GAME');
     persistenceService.clearGame();
+  };
+
+  const handleSelectOnlineGame = (type: GameType) => {
+    setResumedState(null);
+    setGameType(type);
+    setGameMode('ONLINE');
+    setScreen('GAME');
   };
 
   const handleResumeGame = async () => {
@@ -57,12 +66,42 @@ export default function App() {
     return (
       <Home 
         onSelectGame={handleSelectGame} 
+        onSelectOnlineGame={handleSelectOnlineGame}
         onResumeGame={hasSavedGame ? handleResumeGame : undefined} 
       />
     );
   }
 
   if (screen === 'GAME') {
+    if (gameMode === 'ONLINE') {
+      return (
+        <div className="felt-bg h-screen w-full">
+          {gameType === 'SPADES' ? (
+            <SpadesGame
+              initialPlayers={INITIAL_PLAYERS}
+              onExit={handleExitGame}
+              soundEnabled={soundEnabled}
+              onlineMode
+            />
+          ) : gameType === 'CALLBREAK' ? (
+            <CallbreakGame
+              initialPlayers={INITIAL_PLAYERS}
+              onExit={handleExitGame}
+              soundEnabled={soundEnabled}
+              onlineMode
+            />
+          ) : (
+            <HeartsGame
+              initialPlayers={INITIAL_PLAYERS}
+              onExit={handleExitGame}
+              soundEnabled={soundEnabled}
+              onlineMode
+            />
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="felt-bg h-screen w-full">
         {gameType === 'SPADES' ? (

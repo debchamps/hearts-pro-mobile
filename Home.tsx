@@ -6,6 +6,7 @@ import { i18n, DEFAULT_TRANSLATIONS } from './services/i18n';
 import { translateAll } from './services/geminiService';
 import { Overlay } from './SharedComponents';
 import { Preferences } from '@capacitor/preferences';
+import { DebugAuthMode, getDebugAuthMode, setDebugAuthMode } from './client/online/network/authMode';
 
 const GAMES_LIST = [
   { id: 'hearts', name: 'Hearts', icon: '♥️', available: true, color: 'text-red-600' },
@@ -27,11 +28,12 @@ const LANGUAGES: { id: Language; label: string; icon: string }[] = [
 
 const PERSISTED_TRANSLATIONS_KEY = 'PERSISTED_AI_TRANSLATIONS';
 
-export function Home({ onSelectGame, onResumeGame }: { onSelectGame: (type: GameType) => void, onResumeGame?: () => void }) {
+export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSelectGame: (type: GameType) => void, onSelectOnlineGame: (type: GameType) => void, onResumeGame?: () => void }) {
   const [showSettings, setShowSettings] = useState(false);
   const [currentLang, setCurrentLang] = useState<Language>(i18n.getLanguage());
   const [isTranslating, setIsTranslating] = useState(false);
   const [generatedJson, setGeneratedJson] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<DebugAuthMode>('GOOGLE');
 
   useEffect(() => {
     leaderboardService.syncPendingScores();
@@ -48,6 +50,9 @@ export function Home({ onSelectGame, onResumeGame }: { onSelectGame: (type: Game
         i18n.setCustomTranslations(parsed);
         setGeneratedJson(JSON.stringify(parsed, null, 2));
       }
+
+      const savedMode = getDebugAuthMode();
+      if (savedMode) setAuthMode(savedMode);
     };
     loadTranslationsAndLang();
   }, []);
@@ -89,6 +94,11 @@ export function Home({ onSelectGame, onResumeGame }: { onSelectGame: (type: Game
     URL.revokeObjectURL(url);
   };
 
+  const handleAuthModeChange = (mode: DebugAuthMode) => {
+    setDebugAuthMode(mode);
+    setAuthMode(mode);
+  };
+
   const t = (path: string) => i18n.t(path);
 
   return (
@@ -119,16 +129,32 @@ export function Home({ onSelectGame, onResumeGame }: { onSelectGame: (type: Game
       <div className="flex-1 overflow-y-auto px-6 pb-24 grid grid-cols-2 gap-4 content-start pt-4">
          {GAMES_LIST.map((game) => (
            <div key={game.id} className="relative">
-              <div 
-                onClick={() => { if (game.available) onSelectGame(game.id.toUpperCase() as GameType); }}
-                className={`relative aspect-[4/5] rounded-[2rem] p-5 flex flex-col items-center justify-between border-2 transition-all duration-300 group ${game.available ? 'bg-black/40 border-white/10 active:scale-95 shadow-2xl cursor-pointer hover:border-white/30' : 'bg-black/60 border-white/5 opacity-50 grayscale cursor-not-allowed'}`}
+              <div
+                className={`relative aspect-[4/5] rounded-[2rem] p-5 flex flex-col items-center justify-between border-2 transition-all duration-300 group ${game.available ? 'bg-black/40 border-white/10 shadow-2xl hover:border-white/30' : 'bg-black/60 border-white/5 opacity-50 grayscale cursor-not-allowed'}`}
               >
                   <div className={`w-10 h-10 bg-white rounded-xl flex items-center justify-center text-xl shadow-inner border border-white/40 group-hover:scale-110 transition-transform ${game.color}`}>
                     {game.icon}
                   </div>
-                  <div className="flex flex-col items-center">
+                  <div className="flex flex-col items-center w-full gap-2">
                     <span className="text-lg font-black uppercase tracking-tight text-white mb-1">{game.name}</span>
-                    <span className={`text-[8px] font-black uppercase tracking-widest ${game.available ? 'text-green-500' : 'text-yellow-500/80'}`}>{game.available ? 'Play Now' : 'Coming Soon'}</span>
+                    {game.available ? (
+                      <div className="grid grid-cols-2 gap-2 w-full">
+                        <button
+                          onClick={() => onSelectGame(game.id.toUpperCase() as GameType)}
+                          className="py-2 rounded-xl bg-green-500 text-black text-[8px] font-black uppercase tracking-widest active:scale-95"
+                        >
+                          Offline
+                        </button>
+                        <button
+                          onClick={() => onSelectOnlineGame(game.id.toUpperCase() as GameType)}
+                          className="py-2 rounded-xl bg-cyan-500 text-black text-[8px] font-black uppercase tracking-widest active:scale-95"
+                        >
+                          Online
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-[8px] font-black uppercase tracking-widest text-yellow-500/80">Coming Soon</span>
+                    )}
                   </div>
               </div>
            </div>
@@ -149,6 +175,24 @@ export function Home({ onSelectGame, onResumeGame }: { onSelectGame: (type: Game
                       >
                          <span className="text-2xl mb-1">{lang.icon}</span>
                          <span className="text-[9px] font-black uppercase">{lang.label}</span>
+                      </button>
+                    ))}
+                 </div>
+              </div>
+
+              <div className="bg-white/5 p-5 rounded-[2rem] border border-white/10 space-y-3">
+                 <div className="text-left">
+                    <h4 className="text-sm font-black text-cyan-400 uppercase tracking-widest">Auth Mode (Debug)</h4>
+                    <p className="text-[9px] text-white/30 uppercase">Use CUSTOM for browser/dev QA, GOOGLE for token-based login</p>
+                 </div>
+                 <div className="grid grid-cols-2 gap-2">
+                    {(['CUSTOM', 'GOOGLE'] as DebugAuthMode[]).map(mode => (
+                      <button
+                        key={mode}
+                        onClick={() => handleAuthModeChange(mode)}
+                        className={`py-3 rounded-xl border-2 text-[10px] font-black uppercase tracking-widest transition-all ${authMode === mode ? 'bg-cyan-500 text-black border-white scale-[1.02]' : 'bg-white/5 text-white border-white/10'}`}
+                      >
+                        {mode}
                       </button>
                     ))}
                  </div>

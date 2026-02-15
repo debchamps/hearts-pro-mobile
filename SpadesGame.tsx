@@ -6,6 +6,7 @@ import { getSpadesBid, getSpadesMove } from './services/spadesAi';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, ScorecardModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 import { leaderboardService } from './services/leaderboardService';
+import { OnlineGameScreen } from './client/OnlineGameScreen';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -20,7 +21,11 @@ const playSound = (url: string, volume = 0.4) => {
   } catch (e) {}
 };
 
-export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean }) {
+export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled, onlineMode = false }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean, onlineMode?: boolean }) {
+  if (onlineMode) {
+    return <OnlineGameScreen gameType="SPADES" onExit={onExit} />;
+  }
+
   const [gameState, setGameState] = useState<GameState>(initialState || {
     gameType: 'SPADES',
     players: initialPlayers,

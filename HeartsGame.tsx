@@ -6,6 +6,7 @@ import { getBestMove } from './services/heartsAi';
 import { i18n } from './services/i18n';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
+import { OnlineGameScreen } from './client/OnlineGameScreen';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -20,7 +21,11 @@ const playSound = (url: string, volume = 0.4) => {
   } catch (e) {}
 };
 
-export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean }) {
+export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled, onlineMode = false }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean, onlineMode?: boolean }) {
+  if (onlineMode) {
+    return <OnlineGameScreen gameType="HEARTS" onExit={onExit} />;
+  }
+
   const [gameState, setGameState] = useState<GameState>(initialState || {
     gameType: 'HEARTS',
     players: initialPlayers.map(p => ({...p, score: 0, currentRoundScore: 0, tricksWon: 0})),

@@ -3,7 +3,14 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Card, Suit, TrickCard, GameSettings, Language } from "../types";
 import { DEFAULT_TRANSLATIONS } from "./i18n";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let aiClient: GoogleGenAI | null = null;
+
+function getAiClient(): GoogleGenAI {
+  if (aiClient) return aiClient;
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  aiClient = new GoogleGenAI({ apiKey });
+  return aiClient;
+}
 
 const GAME_CONTEXT = `
   Context for the Card Games:
@@ -44,6 +51,7 @@ function generateSchemaFromObject(obj: any): any {
 
 export async function translateAll(sourceData: any): Promise<Record<Language, any>> {
   const targetLanguages: Language[] = ['hi', 'bn', 'ar', 'es', 'pt'];
+  const ai = getAiClient();
   
   try {
     const prompt = `
@@ -107,6 +115,7 @@ export async function getBestMove(
   playerName: string,
   settings: GameSettings = { shootTheMoon: true, noPassing: false, jackOfDiamonds: false, targetScore: 100 }
 ): Promise<string> {
+  const ai = getAiClient();
   try {
     const prompt = `
       ${GAME_CONTEXT}

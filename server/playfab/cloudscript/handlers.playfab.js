@@ -1,0 +1,365 @@
+// PlayFab Classic CloudScript (deploy this file)
+// Title: EF824
+
+var STARTING_COINS = 1000;
+var ENTRY_FEE = 50;
+var REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
+var TIMEOUT_MS = 5000;
+var DEFAULT_REGION = 'US';
+var DEFAULT_CURRENCY_ID = 'CO';
+var QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
+var RECONNECT_WINDOW_MS = 120000;
+var QUICK_MATCH_QUEUES = {
+  HEARTS: 'quickmatch-hearts',
+  SPADES: 'quickmatch-spades',
+  CALLBREAK: 'quickmatch-callbreak'
+};
+var STAT_KEYS = {
+  COINS: 'coins_co_balance',
+  MMR: 'rank_mmr_global',
+  MATCHES_PLAYED: 'matches_played_total',
+  WINS_TOTAL: 'wins_total',
+  HEARTS_BEST: 'hearts_best_score',
+  SPADES_BEST: 'spades_best_score',
+  CALLBREAK_BEST: 'callbreak_best_score'
+};
+
+var cache = {
+  matches: {},
+  lobbies: {},
+  coins: {},
+  stats: {},
+  leaderboard: {}
+};
+
+function randomId(prefix) {
+  return prefix + '_' + Math.random().toString(36).slice(2, 10);
+}
+
+function getCurrentPlayerId(context) {
+  return (context && context.currentPlayerId) || currentPlayerId;
+}
+
+function titleDataGet(key) {
+  try {
+    var out = server.GetTitleData({ Keys: [key] });
+    if (!out || !out.Data || !out.Data[key]) return null;
+    return JSON.parse(out.Data[key]);
+  } catch (e) {
+    return null;
+  }
+}
+
+function titleDataSet(key, value) {
+  try {
+    server.SetTitleData({ Key: key, Value: JSON.stringify(value) });
+  } catch (e) {}
+}
+
+function getCoins(playFabId) {
+  if (cache.coins[playFabId] === undefined) {
+    cache.coins[playFabId] = STARTING_COINS;
+  }
+  return cache.coins[playFabId];
+}
+
+function setCoins(playFabId, coins) {
+  cache.coins[playFabId] = coins;
+  return coins;
+}
+
+function getStats(playFabId) {
+  if (!cache.stats[playFabId]) {
+    cache.stats[playFabId] = {};
+    cache.stats[playFabId][STAT_KEYS.COINS] = STARTING_COINS;
+    cache.stats[playFabId][STAT_KEYS.MMR] = 1000;
+    cache.stats[playFabId][STAT_KEYS.MATCHES_PLAYED] = 0;
+    cache.stats[playFabId][STAT_KEYS.WINS_TOTAL] = 0;
+    cache.stats[playFabId][STAT_KEYS.HEARTS_BEST] = 0;
+    cache.stats[playFabId][STAT_KEYS.SPADES_BEST] = 0;
+    cache.stats[playFabId][STAT_KEYS.CALLBREAK_BEST] = 0;
+  }
+  return cache.stats[playFabId];
+}
+
+function publishPlayerStats(playFabId) {
+  var bag = getStats(playFabId);
+  var list = [];
+  var k;
+  for (k in bag) {
+    if (bag.hasOwnProperty(k)) {
+      list.push({ StatisticName: k, Value: Math.floor(bag[k]) });
+    }
+  }
+  if (list.length > 0) {
+    try {
+      server.UpdatePlayerStatistics({ PlayFabId: playFabId, Statistics: list });
+    } catch (e) {}
+  }
+}
+
+function newMatch(gameType, playerName, playerId) {
+  var now = Date.now();
+  return {
+    matchId: randomId('pfm'),
+    gameType: gameType,
+    revision: 1,
+    seed: now,
+    deck: [],
+    players: [
+      { seat: 0, playFabId: playerId, name: playerName || 'YOU', isBot: false, disconnected: false, pingMs: 42, rankBadge: 'Rookie', coins: STARTING_COINS },
+      { seat: 1, playFabId: 'BOT_1', name: 'BOT 1', isBot: true, disconnected: false, pingMs: 10, rankBadge: 'BOT', coins: STARTING_COINS },
+      { seat: 2, playFabId: 'REMOTE_PLAYER', name: 'OPPONENT', isBot: false, disconnected: false, pingMs: 57, rankBadge: 'Rookie', coins: STARTING_COINS },
+      { seat: 3, playFabId: 'BOT_3', name: 'BOT 3', isBot: true, disconnected: false, pingMs: 12, rankBadge: 'BOT', coins: STARTING_COINS }
+    ],
+    hands: { 0: [], 1: [], 2: [], 3: [] },
+    turnIndex: 0,
+    currentTrick: [],
+    trickLeaderIndex: 0,
+    leadSuit: null,
+    scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
+    roundNumber: 1,
+    status: 'PLAYING',
+    turnDeadlineMs: now + TIMEOUT_MS,
+    serverTimeMs: now
+  };
+}
+
+function saveMatch(match, context) {
+  cache.matches[match.matchId] = match;
+  var ownerId = match.ownerPlayFabId || getCurrentPlayerId(context);
+  match.ownerPlayFabId = ownerId;
+  try {
+    server.UpdateUserReadOnlyData({
+      PlayFabId: ownerId,
+      Data: (function() {
+        var obj = {};
+        obj['match_' + match.matchId] = JSON.stringify(match);
+        return obj;
+      })()
+    });
+  } catch (e) {}
+  // best-effort backup only
+  titleDataSet('match_' + match.matchId, match);
+}
+
+function getMatch(matchId, context) {
+  if (cache.matches[matchId]) return cache.matches[matchId];
+  var pid = getCurrentPlayerId(context);
+  try {
+    var ud = server.GetUserReadOnlyData({ PlayFabId: pid, Keys: ['match_' + matchId] });
+    var raw = ud && ud.Data && ud.Data['match_' + matchId] && ud.Data['match_' + matchId].Value;
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      cache.matches[matchId] = parsed;
+      return parsed;
+    }
+  } catch (e) {}
+
+  var loaded = titleDataGet('match_' + matchId);
+  if (loaded) {
+    cache.matches[matchId] = loaded;
+    return loaded;
+  }
+  throw new Error('Match not found');
+}
+
+function bump(match) {
+  match.revision += 1;
+  match.serverTimeMs = Date.now();
+}
+
+function deltaFor(match) {
+  return {
+    matchId: match.matchId,
+    revision: match.revision,
+    changed: match,
+    serverTimeMs: Date.now()
+  };
+}
+
+function updatePostMatchStats(gameType, player, rank, score, coinsAfter) {
+  if (player.isBot) return;
+  var bag = getStats(player.playFabId);
+  bag[STAT_KEYS.MATCHES_PLAYED] += 1;
+  if (rank === 1) bag[STAT_KEYS.WINS_TOTAL] += 1;
+  bag[STAT_KEYS.COINS] = coinsAfter;
+  bag[STAT_KEYS.MMR] = Math.max(0, bag[STAT_KEYS.MMR] + (rank === 1 ? 20 : rank === 2 ? 10 : rank === 3 ? -5 : -12));
+
+  var bestKey = STAT_KEYS.CALLBREAK_BEST;
+  if (gameType === 'HEARTS') bestKey = STAT_KEYS.HEARTS_BEST;
+  else if (gameType === 'SPADES') bestKey = STAT_KEYS.SPADES_BEST;
+
+  if (score > bag[bestKey]) bag[bestKey] = score;
+  publishPlayerStats(player.playFabId);
+}
+
+handlers.createLobby = function(args, context) {
+  var playerId = getCurrentPlayerId(context);
+  var gameType = args.gameType;
+  var queueName = QUICK_MATCH_QUEUES[gameType] || QUICK_MATCH_QUEUES.HEARTS;
+  var lobbyId = randomId('lobby');
+
+  cache.lobbies[lobbyId] = {
+    lobbyId: lobbyId,
+    gameType: gameType,
+    queueName: queueName,
+    ticketTimeoutSec: QUICK_MATCH_TICKET_TIMEOUT_SEC,
+    region: args.region || DEFAULT_REGION,
+    isPublicQuickMatch: true,
+    members: [playerId],
+    createdAt: Date.now()
+  };
+
+  titleDataSet('lobby_' + lobbyId, cache.lobbies[lobbyId]);
+
+  return {
+    lobbyId: lobbyId,
+    queueName: queueName,
+    ticketTimeoutSec: QUICK_MATCH_TICKET_TIMEOUT_SEC,
+    region: args.region || DEFAULT_REGION
+  };
+};
+
+handlers.findMatch = function(args, context) {
+  var playerId = (args && args.playFabId) || getCurrentPlayerId(context);
+  var gameType = args.gameType;
+
+  if (args.lobbyId && !cache.lobbies[args.lobbyId]) {
+    var lobby = titleDataGet('lobby_' + args.lobbyId);
+    if (lobby) {
+      cache.lobbies[args.lobbyId] = lobby;
+      gameType = lobby.gameType;
+    }
+  }
+
+  var match = newMatch(gameType, args.playerName, playerId);
+  saveMatch(match, context);
+  return { matchId: match.matchId, seat: 0 };
+};
+
+handlers.createMatch = function(args, context) {
+  var playerId = getCurrentPlayerId(context);
+  var match = newMatch(args.gameType, args.playerName, playerId);
+
+  setCoins(playerId, getCoins(playerId) - ENTRY_FEE);
+  getStats(playerId)[STAT_KEYS.COINS] = getCoins(playerId);
+  publishPlayerStats(playerId);
+
+  saveMatch(match, context);
+  return { matchId: match.matchId, seat: 0 };
+};
+
+handlers.joinMatch = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  var seat = 2;
+  match.players[seat].name = args.playerName || match.players[seat].name;
+  bump(match);
+  saveMatch(match, context);
+  return { seat: seat };
+};
+
+handlers.submitMove = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  if (match.turnIndex !== args.seat) throw new Error('Not your turn');
+  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
+
+  match.currentTrick.push({ seat: args.seat, card: { id: args.cardId, suit: 'CLUBS', rank: '2', value: 2, points: 0 } });
+  match.turnIndex = (match.turnIndex + 1) % 4;
+  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  bump(match);
+  saveMatch(match, context);
+  return deltaFor(match);
+};
+
+handlers.getState = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  if (args.sinceRevision >= match.revision) {
+    return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+  }
+  return deltaFor(match);
+};
+
+handlers.timeoutMove = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  if (Date.now() < match.turnDeadlineMs) {
+    return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+  }
+
+  match.currentTrick.push({ seat: match.turnIndex, card: { id: '2-CLUBS', suit: 'CLUBS', rank: '2', value: 2, points: 0 } });
+  match.turnIndex = (match.turnIndex + 1) % 4;
+  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  bump(match);
+  saveMatch(match, context);
+  return deltaFor(match);
+};
+
+handlers.markDisconnected = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  var seat = Number(args.seat || 0);
+  match.players[seat].disconnected = true;
+  match.players[seat].disconnectedAt = Date.now();
+  bump(match);
+  saveMatch(match, context);
+  return { ok: true, reconnectWindowMs: RECONNECT_WINDOW_MS };
+};
+
+handlers.reconnect = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  var seat = 0;
+  var i;
+  for (i = 0; i < match.players.length; i++) {
+    if (match.players[i].playFabId === args.playFabId) {
+      seat = match.players[i].seat;
+      break;
+    }
+  }
+
+  var disconnectedAt = match.players[seat].disconnectedAt || 0;
+  if (disconnectedAt && Date.now() - disconnectedAt > RECONNECT_WINDOW_MS) {
+    throw new Error('Reconnect window expired');
+  }
+
+  match.players[seat].disconnected = false;
+  delete match.players[seat].disconnectedAt;
+  bump(match);
+  saveMatch(match, context);
+  return { seat: seat, delta: deltaFor(match) };
+};
+
+handlers.updateCoins = function(args) {
+  var coins = setCoins(args.playFabId, getCoins(args.playFabId) + args.delta);
+  getStats(args.playFabId)[STAT_KEYS.COINS] = coins;
+  publishPlayerStats(args.playFabId);
+  return { coins: coins, currencyId: DEFAULT_CURRENCY_ID };
+};
+
+handlers.endMatch = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  match.status = 'COMPLETED';
+  bump(match);
+
+  var standings = [0, 1, 2, 3]
+    .map(function(seat) { return { seat: seat, score: match.scores[seat] || 0 }; })
+    .sort(function(a, b) { return b.score - a.score; })
+    .map(function(row, idx) { return { seat: row.seat, score: row.score, rank: idx + 1 }; });
+
+  var rewards = standings.map(function(row) {
+    return { seat: row.seat, coinsDelta: REWARDS[row.rank] - ENTRY_FEE };
+  });
+
+  rewards.forEach(function(reward) {
+    var p = match.players[reward.seat];
+    var next = getCoins(p.playFabId) + reward.coinsDelta;
+    setCoins(p.playFabId, next);
+
+    var standing = standings.find(function(s) { return s.seat === reward.seat; });
+    updatePostMatchStats(match.gameType, p, standing.rank, standing.score, next);
+  });
+
+  cache.leaderboard[match.matchId] = standings;
+  titleDataSet('leaderboard_' + match.matchId, standings);
+  saveMatch(match, context);
+
+  return { standings: standings, rewards: rewards, currencyId: DEFAULT_CURRENCY_ID };
+};

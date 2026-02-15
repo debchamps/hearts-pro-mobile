@@ -6,6 +6,7 @@ import { getCallbreakBid, getCallbreakMove } from './services/callbreakAi';
 import { Avatar, CardView, Overlay, HistoryModal, CallbreakScorecardModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 import { leaderboardService } from './services/leaderboardService';
+import { OnlineGameScreen } from './client/OnlineGameScreen';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -20,7 +21,11 @@ const playSound = (url: string, volume = 0.4) => {
   } catch (e) {}
 };
 
-export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabled }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean }) {
+export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabled, onlineMode = false }: { initialPlayers: Player[], initialState?: GameState | null, onExit: () => void, soundEnabled: boolean, onlineMode?: boolean }) {
+  if (onlineMode) {
+    return <OnlineGameScreen gameType="CALLBREAK" onExit={onExit} />;
+  }
+
   const [gameState, setGameState] = useState<GameState>(initialState || {
     gameType: 'CALLBREAK',
     players: initialPlayers.map(p => ({ ...p, score: 0, tricksWon: 0 })),

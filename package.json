@@ -9,6 +9,7 @@
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test:online": "node --test client/online/tests/cloudscript.test.mjs",
     "cap:sync": "npx cap sync",
     "cap:open": "npx cap open android"
   },
