@@ -16,6 +16,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const [renderTrick, setRenderTrick] = useState<Array<{ seat: number; card: any }>>([]);
   const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
   const clearTimerRef = useRef<number | null>(null);
+  const lastCompletedAtRef = useRef<number>(0);
 
   useEffect(() => {
     let mounted = true;
@@ -67,6 +68,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   useEffect(() => {
     if (!state) return;
     const serverTrick = (state.currentTrick || []) as Array<{ seat: number; card: any }>;
+    const completed = (state as any).lastCompletedTrick as { trick: Array<{ seat: number; card: any }>; winner: number; at: number } | null;
 
     if (serverTrick.length > 0) {
       if (clearTimerRef.current !== null) {
@@ -75,6 +77,22 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       }
       setClearingTrickWinner(null);
       setRenderTrick(serverTrick);
+      return;
+    }
+
+    if (completed && completed.at && completed.at > lastCompletedAtRef.current && Array.isArray(completed.trick) && completed.trick.length > 0) {
+      lastCompletedAtRef.current = completed.at;
+      if (clearTimerRef.current !== null) {
+        window.clearTimeout(clearTimerRef.current);
+        clearTimerRef.current = null;
+      }
+      setRenderTrick(completed.trick);
+      setClearingTrickWinner(typeof completed.winner === 'number' ? completed.winner : (typeof state.turnIndex === 'number' ? state.turnIndex : 0));
+      clearTimerRef.current = window.setTimeout(() => {
+        setRenderTrick([]);
+        setClearingTrickWinner(null);
+        clearTimerRef.current = null;
+      }, 420);
       return;
     }
 

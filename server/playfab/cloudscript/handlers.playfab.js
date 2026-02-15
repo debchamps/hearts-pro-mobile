@@ -119,6 +119,7 @@ function newMatch(gameType, playerName, playerId) {
     hands: { 0: [], 1: [], 2: [], 3: [] },
     turnIndex: 0,
     currentTrick: [],
+    lastCompletedTrick: null,
     trickLeaderIndex: 0,
     leadSuit: null,
     scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
@@ -270,6 +271,7 @@ function applyMove(match, seat, cardId, allowFallback) {
     return;
   }
 
+  var completedTrick = match.currentTrick.slice();
   var winner = resolveTrickWinner(match);
   var trickPoints = 0;
   var k;
@@ -278,6 +280,11 @@ function applyMove(match, seat, cardId, allowFallback) {
   }
   match.scores[winner] = (match.scores[winner] || 0) + trickPoints;
   match.currentTrick = [];
+  match.lastCompletedTrick = {
+    trick: completedTrick,
+    winner: winner,
+    at: Date.now()
+  };
   match.leadSuit = null;
   match.turnIndex = winner;
   match.trickLeaderIndex = winner;
