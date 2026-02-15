@@ -41,15 +41,32 @@ export class MultiplayerService {
     if (!this.state || !this.matchId) throw new Error('No active match');
     const api = await this.ensureApi();
 
-    const delta = await api.submitMove({
-      matchId: this.matchId,
-      seat: this.seat,
-      cardId,
-      expectedRevision: this.state.revision,
-    });
+    const trySubmit = async () => {
+      const delta = await api.submitMove({
+        matchId: this.matchId!,
+        seat: this.seat,
+        cardId,
+        expectedRevision: this.state!.revision,
+      });
+      this.state = applyDelta(this.state, delta);
+      return this.state!;
+    };
 
-    this.state = applyDelta(this.state, delta);
-    return this.state;
+    try {
+      return await trySubmit();
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (!msg.includes('Revision mismatch')) throw e;
+
+      // Resync full state then retry once.
+      const refresh = await api.getState({
+        matchId: this.matchId,
+        sinceRevision: 0,
+        seat: this.seat,
+      });
+      this.state = applyDelta(this.state, refresh);
+      return trySubmit();
+    }
   }
 
   async pollDelta(): Promise<MultiplayerGameState | null> {

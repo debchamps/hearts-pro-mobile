@@ -84,6 +84,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   }, [state?.revision, state?.turnIndex, renderTrick, clearingTrickWinner, state]);
 
   const selfSeat = serviceRef.current.getSeat();
+  const toViewSeat = (seat: number) => (seat - selfSeat + 4) % 4;
+  const toGlobalSeat = (viewSeat: number) => (viewSeat + selfSeat) % 4;
   const hand = useMemo(() => {
     if (!state) return [];
     const hands = (state as any).hands || {};
@@ -107,8 +109,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       isHuman: !p.isBot,
       tricksWon: trickWins[p.seat] || 0,
       teamId: p.teamId,
-    }));
-  }, [state]);
+    })).sort((a, b) => toViewSeat(a.id) - toViewSeat(b.id));
+  }, [state, selfSeat]);
 
   const handLayout = useMemo(() => {
     if (!hand.length) return [] as Array<{ card: any; x: number }>;
@@ -136,7 +138,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         setResult(`Match complete. Coin delta: ${mine?.coinsDelta ?? 0}`);
       }
     } catch (e) {
-      setError((e as Error).message);
+      const msg = (e as Error).message || '';
+      // Non-fatal race cases: resync and continue.
+      if (msg.includes('Revision mismatch') || msg.includes('Not your turn')) {
+        try {
+          const next = await serviceRef.current.pollDelta();
+          if (next) setState({ ...next });
+          return;
+        } catch {}
+      }
+      setError(msg);
     }
   };
 
@@ -168,27 +179,36 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       </div>
 
       <div className="h-[70%] relative w-full">
-        {avatarPlayers[0] && (
-          <Avatar player={avatarPlayers[0]} pos="bottom-6 left-1/2 -translate-x-1/2" active={state.turnIndex === 0} phase="PLAYING" gameType={gameType} />
-        )}
-        {avatarPlayers[1] && (
-          <Avatar player={avatarPlayers[1]} pos="top-1/2 right-4 -translate-y-1/2" active={state.turnIndex === 1} phase="PLAYING" gameType={gameType} />
-        )}
-        {avatarPlayers[2] && (
-          <Avatar player={avatarPlayers[2]} pos="top-6 left-1/2 -translate-x-1/2" active={state.turnIndex === 2} phase="PLAYING" gameType={gameType} />
-        )}
-        {avatarPlayers[3] && (
-          <Avatar player={avatarPlayers[3]} pos="top-1/2 left-4 -translate-y-1/2" active={state.turnIndex === 3} phase="PLAYING" gameType={gameType} />
-        )}
+        {avatarPlayers.map((p) => {
+          const viewSeat = toViewSeat(p.id);
+          const positions = [
+            "bottom-6 left-1/2 -translate-x-1/2",
+            "top-1/2 right-4 -translate-y-1/2",
+            "top-6 left-1/2 -translate-x-1/2",
+            "top-1/2 left-4 -translate-y-1/2",
+          ];
+          return (
+            <Avatar
+              key={p.id}
+              player={p}
+              pos={positions[viewSeat]}
+              active={toViewSeat(state.turnIndex ?? 0) === viewSeat}
+              phase="PLAYING"
+              gameType={gameType}
+            />
+          );
+        })}
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[20rem] h-[20rem] flex items-center justify-center pointer-events-none">
           <div className="flex gap-3 justify-center min-h-[86px] items-center relative">
             {state.status === 'WAITING' ? (
               <span className="text-xs text-yellow-300">Waiting for second player to join...</span>
             ) : renderTrick.length === 0 ? <span className="text-xs text-white/50">Waiting for first card...</span> : renderTrick.map((t, idx) => {
-              const off = [{ x: 0, y: 45 }, { x: 60, y: 0 }, { x: 0, y: -45 }, { x: -60, y: 0 }][t.seat] || { x: 0, y: 0 };
-              const startPos = [{ x: 0, y: 350 }, { x: 400, y: 0 }, { x: 0, y: -350 }, { x: -400, y: 0 }][t.seat] || { x: 0, y: 0 };
-              const winDir = [{ x: 0, y: 600 }, { x: 500, y: 0 }, { x: 0, y: -600 }, { x: -500, y: 0 }][clearingTrickWinner ?? 0] || { x: 0, y: 0 };
+              const trickViewSeat = toViewSeat(t.seat);
+              const winnerViewSeat = toViewSeat(clearingTrickWinner ?? toGlobalSeat(0));
+              const off = [{ x: 0, y: 45 }, { x: 60, y: 0 }, { x: 0, y: -45 }, { x: -60, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
+              const startPos = [{ x: 0, y: 350 }, { x: 400, y: 0 }, { x: 0, y: -350 }, { x: -400, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
+              const winDir = [{ x: 0, y: 600 }, { x: 500, y: 0 }, { x: 0, y: -600 }, { x: -500, y: 0 }][winnerViewSeat] || { x: 0, y: 0 };
               return (
                 <div
                   key={`${t.seat}-${t.card.id}-${idx}`}
