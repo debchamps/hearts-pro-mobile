@@ -18,18 +18,8 @@ export class MultiplayerService {
 
   async createMatch(gameType: GameType, playerName: string): Promise<MultiplayerGameState> {
     const api = await this.ensureApi();
-    let matchId: string | null = null;
-    let matchedSeat: number | null = null;
-
-    if (api.createLobby && api.findMatch) {
-      const lobby = await api.createLobby({ gameType, region: 'US' });
-      const found = await api.findMatch({ gameType, lobbyId: lobby.lobbyId, playerName });
-      matchId = found.matchId;
-      matchedSeat = found.seat;
-    }
-
-    const created = matchId && matchedSeat !== null
-      ? { matchId, seat: matchedSeat }
+    const created = api.findMatch
+      ? await api.findMatch({ gameType, playerName })
       : await api.createMatch({ gameType, playerName });
 
     this.matchId = created.matchId;

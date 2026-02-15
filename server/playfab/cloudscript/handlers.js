@@ -175,11 +175,33 @@ export function createLobby(args, context = {}) {
 }
 
 export function findMatch(args) {
-  const requestedLobby = args.lobbyId ? assertLobby(args.lobbyId) : null;
-  const gameType = requestedLobby?.gameType || args.gameType;
+  const gameType = args.gameType;
   const playerId = args.playFabId || 'LOCAL_PLAYER';
+  const queueKey = `${gameType}_WAITING`;
+  const waiting = stateStore.lobbies.get(queueKey);
+
+  if (waiting && waiting.ownerPlayFabId !== playerId) {
+    const existing = assertMatch(waiting.matchId);
+    existing.players[2] = {
+      ...existing.players[2],
+      playFabId: playerId,
+      name: args.playerName || 'OPPONENT',
+      isBot: false,
+      rankBadge: 'Rookie',
+      pingMs: 57,
+    };
+    bump(existing);
+    stateStore.lobbies.delete(queueKey);
+    return { matchId: existing.matchId, seat: 2 };
+  }
+
   const match = newMatch(gameType, args.playerName, playerId);
   stateStore.matches.set(match.matchId, match);
+  stateStore.lobbies.set(queueKey, {
+    ownerPlayFabId: playerId,
+    matchId: match.matchId,
+    createdAt: Date.now(),
+  });
   return { matchId: match.matchId, seat: 0 };
 }
 

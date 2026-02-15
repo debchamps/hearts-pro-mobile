@@ -109,7 +109,7 @@ function newMatch(gameType, playerName, playerId) {
     players: [
       { seat: 0, playFabId: playerId, name: playerName || 'YOU', isBot: false, disconnected: false, pingMs: 42, rankBadge: 'Rookie', coins: STARTING_COINS },
       { seat: 1, playFabId: 'BOT_1', name: 'BOT 1', isBot: true, disconnected: false, pingMs: 10, rankBadge: 'BOT', coins: STARTING_COINS },
-      { seat: 2, playFabId: 'REMOTE_PLAYER', name: 'OPPONENT', isBot: false, disconnected: false, pingMs: 57, rankBadge: 'Rookie', coins: STARTING_COINS },
+      { seat: 2, playFabId: 'PENDING_HUMAN', name: 'OPPONENT', isBot: false, disconnected: false, pingMs: 57, rankBadge: 'Rookie', coins: STARTING_COINS },
       { seat: 3, playFabId: 'BOT_3', name: 'BOT 3', isBot: true, disconnected: false, pingMs: 12, rankBadge: 'BOT', coins: STARTING_COINS }
     ],
     hands: { 0: [], 1: [], 2: [], 3: [] },
@@ -125,13 +125,19 @@ function newMatch(gameType, playerName, playerId) {
   };
 }
 
-function saveMatch(match, context) {
-  cache.matches[match.matchId] = match;
-  var ownerId = match.ownerPlayFabId || getCurrentPlayerId(context);
-  match.ownerPlayFabId = ownerId;
+function isRealHumanPlayerId(playFabId) {
+  if (!playFabId) return false;
+  if (playFabId.indexOf('BOT_') === 0) return false;
+  if (playFabId === 'PENDING_HUMAN') return false;
+  if (playFabId === 'REMOTE_PLAYER') return false;
+  return true;
+}
+
+function saveMatchForPlayer(playFabId, match) {
+  if (!isRealHumanPlayerId(playFabId)) return;
   try {
     server.UpdateUserReadOnlyData({
-      PlayFabId: ownerId,
+      PlayFabId: playFabId,
       Data: (function() {
         var obj = {};
         obj['match_' + match.matchId] = JSON.stringify(match);
@@ -139,6 +145,18 @@ function saveMatch(match, context) {
       })()
     });
   } catch (e) {}
+}
+
+function saveMatch(match, context) {
+  cache.matches[match.matchId] = match;
+  var ownerId = match.ownerPlayFabId || getCurrentPlayerId(context);
+  match.ownerPlayFabId = ownerId;
+  saveMatchForPlayer(ownerId, match);
+  // Mirror state to all human seats so both clients can read consistently.
+  var i;
+  for (i = 0; i < match.players.length; i++) {
+    saveMatchForPlayer(match.players[i].playFabId, match);
+  }
   // best-effort backup only
   titleDataSet('match_' + match.matchId, match);
 }
@@ -225,16 +243,30 @@ handlers.findMatch = function(args, context) {
   var playerId = (args && args.playFabId) || getCurrentPlayerId(context);
   var gameType = args.gameType;
 
-  if (args.lobbyId && !cache.lobbies[args.lobbyId]) {
-    var lobby = titleDataGet('lobby_' + args.lobbyId);
-    if (lobby) {
-      cache.lobbies[args.lobbyId] = lobby;
-      gameType = lobby.gameType;
-    }
+  // Public quick-match queue by game type.
+  var waitKey = 'waiting_' + gameType;
+  var waiting = titleDataGet(waitKey);
+  if (waiting && waiting.matchId && waiting.ownerPlayFabId && waiting.ownerPlayFabId !== playerId) {
+    var existing = getMatch(waiting.matchId, context);
+    existing.players[2].playFabId = playerId;
+    existing.players[2].name = args.playerName || 'OPPONENT';
+    existing.players[2].isBot = false;
+    existing.players[2].rankBadge = 'Rookie';
+    existing.players[2].pingMs = 57;
+    bump(existing);
+    saveMatch(existing, context);
+    titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+    return { matchId: existing.matchId, seat: 2 };
   }
 
   var match = newMatch(gameType, args.playerName, playerId);
   saveMatch(match, context);
+  titleDataSet(waitKey, {
+    matchId: match.matchId,
+    ownerPlayFabId: playerId,
+    gameType: gameType,
+    createdAt: Date.now()
+  });
   return { matchId: match.matchId, seat: 0 };
 };
 
