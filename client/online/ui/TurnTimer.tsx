@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-export function TurnTimer({ deadlineMs, serverTimeMs }: { deadlineMs: number; serverTimeMs: number }) {
+export function TurnTimer({ deadlineMs, serverTimeMs, durationMs = 5000 }: { deadlineMs: number; serverTimeMs: number; durationMs?: number }) {
   const [now, setNow] = useState(serverTimeMs);
 
   useEffect(() => {
@@ -10,9 +10,8 @@ export function TurnTimer({ deadlineMs, serverTimeMs }: { deadlineMs: number; se
 
   const pct = useMemo(() => {
     const remaining = Math.max(0, deadlineMs - now);
-    const total = 5000;
-    return Math.max(0, Math.min(1, remaining / total));
-  }, [deadlineMs, now]);
+    return Math.max(0, Math.min(1, remaining / Math.max(1, durationMs)));
+  }, [deadlineMs, now, durationMs]);
 
   const radius = 22;
   const circumference = 2 * Math.PI * radius;

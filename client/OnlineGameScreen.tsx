@@ -46,7 +46,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       } catch (e) {
         setError((e as Error).message);
       }
-    }, 250);
+    }, 150);
 
     return () => clearInterval(timer);
   }, [state]);
@@ -85,7 +85,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         setRenderTrick([]);
         setClearingTrickWinner(null);
         clearTimerRef.current = null;
-      }, 700);
+      }, 420);
     }
   }, [state?.revision, state?.turnIndex, renderTrick, clearingTrickWinner, state]);
 
@@ -213,7 +213,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         <button className="px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-xs font-black uppercase" onClick={onExit}>Exit</button>
         <div className="text-sm uppercase font-black tracking-widest">{state.gameType} Online</div>
         {state.status === 'PLAYING' ? (
-          <TurnTimer deadlineMs={state.turnDeadlineMs} serverTimeMs={state.serverTimeMs} />
+          <TurnTimer
+            deadlineMs={state.turnDeadlineMs}
+            serverTimeMs={state.serverTimeMs}
+            durationMs={(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected) ? 900 : 9000}
+          />
         ) : (
           <div className="text-[10px] font-black uppercase text-yellow-300">Waiting...</div>
         )}
@@ -270,6 +274,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
                     '--start-y': `${startPos.y}px`,
                     '--clear-x': `${winDir.x}px`,
                     '--clear-y': `${winDir.y}px`,
+                    animationDuration: clearingTrickWinner !== null ? '420ms' : '240ms',
                     zIndex: 10 + idx,
                   } as any}
                 >

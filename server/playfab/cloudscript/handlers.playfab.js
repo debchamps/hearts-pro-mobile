@@ -4,8 +4,8 @@
 var STARTING_COINS = 1000;
 var ENTRY_FEE = 50;
 var REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
-var HUMAN_TIMEOUT_MS = 10000;
-var BOT_TIMEOUT_MS = 1400;
+var HUMAN_TIMEOUT_MS = 9000;
+var BOT_TIMEOUT_MS = 900;
 var DEFAULT_REGION = 'US';
 var DEFAULT_CURRENCY_ID = 'CO';
 var QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
@@ -474,12 +474,8 @@ handlers.submitMove = function(args, context) {
 
 handlers.getState = function(args, context) {
   var match = getMatch(args.matchId, context);
-  var changed = false;
-  var guard = 0;
-  while (runServerTurn(match) && guard < 4) {
-    changed = true;
-    guard += 1;
-  }
+  // Process at most one server-side move per poll so clients can render each move animation.
+  var changed = runServerTurn(match);
   if (changed) {
     bump(match);
     saveMatch(match, context);
