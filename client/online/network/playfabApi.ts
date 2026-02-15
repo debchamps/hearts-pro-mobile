@@ -68,6 +68,14 @@ class PlayFabCloudScriptApi implements OnlineApi {
     return this.call('submitMove', input);
   }
 
+  submitPass(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }) {
+    return this.call('submitPass', input);
+  }
+
+  submitBid(input: { matchId: string; seat: number; bid: number; expectedRevision: number }) {
+    return this.call('submitBid', input);
+  }
+
   getState(input: { matchId: string; sinceRevision: number; seat?: number }) {
     return this.call('getState', input);
   }

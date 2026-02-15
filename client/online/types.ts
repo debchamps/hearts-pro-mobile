@@ -37,6 +37,9 @@ export interface MultiplayerGameState {
   bids: Record<number, number | null>;
   roundNumber: number;
   status: 'WAITING' | 'PLAYING' | 'COMPLETED';
+  phase?: 'WAITING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'COMPLETED';
+  passingSelections?: Record<number, string[]>;
+  passingDirection?: 'LEFT' | 'RIGHT' | 'ACROSS';
   turnDeadlineMs: number;
   serverTimeMs: number;
 }
@@ -84,6 +87,8 @@ export interface OnlineApi {
   createMatch(input: { gameType: GameType; playerName: string }): Promise<{ matchId: string; seat: number }>;
   joinMatch(input: { matchId: string; playerName: string }): Promise<{ seat: number }>;
   submitMove(input: MoveSubmission): Promise<GameStateDelta>;
+  submitPass?(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }): Promise<GameStateDelta>;
+  submitBid?(input: { matchId: string; seat: number; bid: number; expectedRevision: number }): Promise<GameStateDelta>;
   getState(input: { matchId: string; sinceRevision: number; seat?: number }): Promise<GameStateDelta>;
   timeoutMove(input: { matchId: string }): Promise<GameStateDelta>;
   endMatch(input: { matchId: string }): Promise<MatchResult>;

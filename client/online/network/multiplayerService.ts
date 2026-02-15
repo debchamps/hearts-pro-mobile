@@ -69,6 +69,60 @@ export class MultiplayerService {
     }
   }
 
+  async submitPass(cardIds: string[]): Promise<MultiplayerGameState> {
+    if (!this.state || !this.matchId) throw new Error('No active match');
+    const api = await this.ensureApi();
+    if (!api.submitPass) throw new Error('Pass API not available');
+
+    const trySubmit = async () => {
+      const delta = await api.submitPass!({
+        matchId: this.matchId!,
+        seat: this.seat,
+        cardIds,
+        expectedRevision: this.state!.revision,
+      });
+      this.state = applyDelta(this.state, delta);
+      return this.state!;
+    };
+
+    try {
+      return await trySubmit();
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (!msg.includes('Revision mismatch')) throw e;
+      const refresh = await api.getState({ matchId: this.matchId, sinceRevision: 0, seat: this.seat });
+      this.state = applyDelta(this.state, refresh);
+      return trySubmit();
+    }
+  }
+
+  async submitBid(bid: number): Promise<MultiplayerGameState> {
+    if (!this.state || !this.matchId) throw new Error('No active match');
+    const api = await this.ensureApi();
+    if (!api.submitBid) throw new Error('Bid API not available');
+
+    const trySubmit = async () => {
+      const delta = await api.submitBid!({
+        matchId: this.matchId!,
+        seat: this.seat,
+        bid,
+        expectedRevision: this.state!.revision,
+      });
+      this.state = applyDelta(this.state, delta);
+      return this.state!;
+    };
+
+    try {
+      return await trySubmit();
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (!msg.includes('Revision mismatch')) throw e;
+      const refresh = await api.getState({ matchId: this.matchId, sinceRevision: 0, seat: this.seat });
+      this.state = applyDelta(this.state, refresh);
+      return trySubmit();
+    }
+  }
+
   async pollDelta(): Promise<MultiplayerGameState | null> {
     if (!this.state || !this.matchId) return null;
     const api = await this.ensureApi();

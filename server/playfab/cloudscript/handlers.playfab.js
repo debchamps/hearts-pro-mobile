@@ -125,6 +125,9 @@ function newMatch(gameType, playerName, playerId) {
     scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
     roundNumber: 1,
     status: 'WAITING',
+    phase: 'WAITING',
+    passingSelections: { 0: [], 1: [], 2: [], 3: [] },
+    passingDirection: 'LEFT',
     turnDeadlineMs: now + HUMAN_TIMEOUT_MS,
     serverTimeMs: now
   };
@@ -197,8 +200,77 @@ function startMatchIfReady(match) {
   match.leadSuit = null;
   match.turnIndex = 0;
   match.trickLeaderIndex = 0;
+  match.passingSelections = { 0: [], 1: [], 2: [], 3: [] };
+  match.bids = { 0: null, 1: null, 2: null, 3: null };
+  if (match.gameType === 'HEARTS') {
+    match.phase = 'PASSING';
+  } else if (match.gameType === 'CALLBREAK') {
+    match.phase = 'BIDDING';
+  } else {
+    match.phase = 'PLAYING';
+  }
   match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
   match.status = 'PLAYING';
+  return true;
+}
+
+function isSeatBotOrDisconnected(match, seat) {
+  var p = match.players[seat];
+  return !!(p && (p.isBot || p.disconnected));
+}
+
+function autoSelectPass(match, seat) {
+  var hand = (match.hands[seat] || []).slice().sort(function(a, b) { return b.value - a.value; });
+  match.passingSelections[seat] = hand.slice(0, 3).map(function(c) { return c.id; });
+}
+
+function finalizePassing(match) {
+  var seat;
+  var passes = { 0: [], 1: [], 2: [], 3: [] };
+  for (seat = 0; seat < 4; seat++) {
+    var sel = match.passingSelections[seat] || [];
+    var chosen = [];
+    var hand = match.hands[seat] || [];
+    var i;
+    for (i = 0; i < hand.length; i++) {
+      if (sel.indexOf(hand[i].id) >= 0) chosen.push(hand[i]);
+    }
+    passes[seat] = chosen.slice(0, 3);
+    match.hands[seat] = hand.filter(function(c) { return sel.indexOf(c.id) < 0; });
+  }
+
+  for (seat = 0; seat < 4; seat++) {
+    var target = (seat + 1) % 4; // pass left
+    match.hands[target] = (match.hands[target] || []).concat(passes[seat] || []);
+  }
+
+  for (seat = 0; seat < 4; seat++) {
+    match.hands[seat] = (match.hands[seat] || []).sort(function(a, b) {
+      if (a.suit === b.suit) return a.value - b.value;
+      return String(a.suit).localeCompare(String(b.suit));
+    });
+  }
+  match.passingSelections = { 0: [], 1: [], 2: [], 3: [] };
+  match.phase = 'PLAYING';
+  match.turnIndex = 0;
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+}
+
+function autoBid(match, seat) {
+  var hand = match.hands[seat] || [];
+  var high = hand.filter(function(c) { return c.value >= 11; }).length;
+  var bid = Math.max(1, Math.min(8, Math.round(high / 2)));
+  match.bids[seat] = bid;
+}
+
+function finalizeBidding(match) {
+  var i;
+  for (i = 0; i < 4; i++) {
+    if (match.bids[i] === null || match.bids[i] === undefined) return false;
+  }
+  match.phase = 'PLAYING';
+  match.turnIndex = 0;
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
   return true;
 }
 
@@ -297,7 +369,33 @@ function applyMove(match, seat, cardId, allowFallback) {
 
 function runServerTurn(match) {
   if (match.status !== 'PLAYING') return false;
+  if (!match.phase) match.phase = 'PLAYING';
   if (Date.now() < match.turnDeadlineMs) return false;
+  if (match.phase === 'PASSING') {
+    if (!isSeatBotOrDisconnected(match, match.turnIndex)) return false;
+    autoSelectPass(match, match.turnIndex);
+    match.turnIndex = (match.turnIndex + 1) % 4;
+    if ((match.passingSelections[0] || []).length === 3 &&
+        (match.passingSelections[1] || []).length === 3 &&
+        (match.passingSelections[2] || []).length === 3 &&
+        (match.passingSelections[3] || []).length === 3) {
+      finalizePassing(match);
+    } else {
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+    }
+    return true;
+  }
+
+  if (match.phase === 'BIDDING') {
+    if (!isSeatBotOrDisconnected(match, match.turnIndex)) return false;
+    autoBid(match, match.turnIndex);
+    if (!finalizeBidding(match)) {
+      match.turnIndex = (match.turnIndex + 1) % 4;
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+    }
+    return true;
+  }
+
   applyMove(match, match.turnIndex, '', true);
   return true;
 }
@@ -472,8 +570,75 @@ handlers.joinMatch = function(args, context) {
 handlers.submitMove = function(args, context) {
   var match = getMatch(args.matchId, context);
   if (match.status === 'WAITING') throw new Error('Waiting for second player');
+  if (match.phase !== 'PLAYING') throw new Error('Round setup in progress');
   if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
   applyMove(match, args.seat, args.cardId, false);
+  bump(match);
+  saveMatch(match, context);
+  return deltaFor(match);
+};
+
+handlers.submitPass = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  if (match.phase !== 'PASSING') throw new Error('Not in passing phase');
+  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
+  if (args.seat !== match.turnIndex) throw new Error('Not your turn');
+  if (isSeatBotOrDisconnected(match, args.seat)) throw new Error('Bot seat cannot submit pass');
+  if (!args.cardIds || args.cardIds.length !== 3) throw new Error('Select exactly 3 cards');
+
+  var hand = match.hands[args.seat] || [];
+  var i;
+  for (i = 0; i < args.cardIds.length; i++) {
+    var found = false;
+    var j;
+    for (j = 0; j < hand.length; j++) {
+      if (hand[j].id === args.cardIds[i]) { found = true; break; }
+    }
+    if (!found) throw new Error('Card not in hand');
+  }
+
+  match.passingSelections[args.seat] = args.cardIds.slice();
+  match.turnIndex = (match.turnIndex + 1) % 4;
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+
+  while (isSeatBotOrDisconnected(match, match.turnIndex) && (match.passingSelections[match.turnIndex] || []).length < 3) {
+    autoSelectPass(match, match.turnIndex);
+    match.turnIndex = (match.turnIndex + 1) % 4;
+    match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+  }
+
+  if ((match.passingSelections[0] || []).length === 3 &&
+      (match.passingSelections[1] || []).length === 3 &&
+      (match.passingSelections[2] || []).length === 3 &&
+      (match.passingSelections[3] || []).length === 3) {
+    finalizePassing(match);
+  }
+
+  bump(match);
+  saveMatch(match, context);
+  return deltaFor(match);
+};
+
+handlers.submitBid = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  if (match.phase !== 'BIDDING') throw new Error('Not in bidding phase');
+  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
+  if (args.seat !== match.turnIndex) throw new Error('Not your turn');
+  if (isSeatBotOrDisconnected(match, args.seat)) throw new Error('Bot seat cannot submit bid');
+  if (typeof args.bid !== 'number' || args.bid < 1 || args.bid > 8) throw new Error('Bid must be between 1 and 8');
+
+  match.bids[args.seat] = Math.floor(args.bid);
+  if (!finalizeBidding(match)) {
+    match.turnIndex = (match.turnIndex + 1) % 4;
+    match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+    while (isSeatBotOrDisconnected(match, match.turnIndex) && (match.bids[match.turnIndex] === null || match.bids[match.turnIndex] === undefined)) {
+      autoBid(match, match.turnIndex);
+      if (finalizeBidding(match)) break;
+      match.turnIndex = (match.turnIndex + 1) % 4;
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+    }
+  }
+
   bump(match);
   saveMatch(match, context);
   return deltaFor(match);
@@ -573,3 +738,5 @@ handlers.endMatch = function(args, context) {
 
   return { standings: standings, rewards: rewards, currencyId: DEFAULT_CURRENCY_ID };
 };
+
+// Exported by naming convention: handlers.<functionName>

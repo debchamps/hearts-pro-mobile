@@ -110,6 +110,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const selfSeat = serviceRef.current.getSeat();
   const toViewSeat = (seat: number) => (seat - selfSeat + 4) % 4;
   const toGlobalSeat = (viewSeat: number) => (viewSeat + selfSeat) % 4;
+  const phase = ((state as any)?.phase || (state?.status === 'WAITING' ? 'WAITING' : 'PLAYING')) as 'WAITING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'COMPLETED';
+  const [selectedPassIds, setSelectedPassIds] = useState<string[]>([]);
   const hand = useMemo(() => {
     if (!state) return [];
     const hands = (state as any).hands || {};
@@ -152,7 +154,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   }, [hand]);
 
   const playableIds = useMemo(() => {
-    if (!state || state.status !== 'PLAYING') return new Set<string>();
+    if (!state || state.status !== 'PLAYING' || phase !== 'PLAYING') return new Set<string>();
     const currentHand = ((state as any).hands || {})[selfSeat] || [];
     if (!Array.isArray(currentHand) || currentHand.length === 0) return new Set<string>();
     const leadSuit = (state as any).leadSuit || null;
@@ -167,15 +169,23 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     }
 
     return new Set(currentHand.map((c: any) => c.id));
-  }, [state, selfSeat]);
+  }, [state, selfSeat, phase]);
+
+  useEffect(() => {
+    if (phase !== 'PASSING') setSelectedPassIds([]);
+  }, [phase, state?.revision]);
 
   const submit = async (cardId: string) => {
     if (!state) return;
-    if (state.status === 'WAITING') {
+    if (state.status === 'WAITING' || phase === 'WAITING') {
       showMessage('Waiting for second player...');
       return;
     }
     if (state.status !== 'PLAYING') return;
+    if (phase !== 'PLAYING') {
+      showMessage(phase === 'PASSING' ? 'Complete passing first' : phase === 'BIDDING' ? 'Complete bidding first' : 'Round setup in progress');
+      return;
+    }
     if (state.turnIndex !== selfSeat) {
       showMessage('Wait for your turn');
       return;
@@ -207,6 +217,50 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         } catch {}
       }
       setError(msg);
+    }
+  };
+
+  const togglePassCard = (cardId: string) => {
+    if (phase !== 'PASSING') return;
+    if (!state || state.turnIndex !== selfSeat) {
+      showMessage('Wait for your passing turn');
+      return;
+    }
+    setSelectedPassIds((prev) => {
+      if (prev.includes(cardId)) return prev.filter((id) => id !== cardId);
+      if (prev.length >= 3) return prev;
+      return [...prev, cardId];
+    });
+  };
+
+  const confirmPass = async () => {
+    if (!state || phase !== 'PASSING') return;
+    if (selectedPassIds.length !== 3) {
+      showMessage('Select exactly 3 cards');
+      return;
+    }
+    try {
+      const next = await serviceRef.current.submitPass(selectedPassIds);
+      setState({ ...next });
+      setSelectedPassIds([]);
+      showMessage('Cards passed');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const submitBid = async (bid: number) => {
+    if (!state || phase !== 'BIDDING') return;
+    if (state.turnIndex !== selfSeat) {
+      showMessage('Wait for your bidding turn');
+      return;
+    }
+    try {
+      const next = await serviceRef.current.submitBid(bid);
+      setState({ ...next });
+      showMessage(`Bid ${bid} submitted`);
+    } catch (e) {
+      setError((e as Error).message);
     }
   };
 
@@ -272,8 +326,12 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[20rem] h-[20rem] flex items-center justify-center pointer-events-none">
           <div className="flex gap-3 justify-center min-h-[86px] items-center relative">
-            {state.status === 'WAITING' ? (
+            {state.status === 'WAITING' || phase === 'WAITING' ? (
               <span className="text-xs text-yellow-300">Waiting for second player to join...</span>
+            ) : phase === 'PASSING' ? (
+              <span className="text-xs text-yellow-300">Passing phase in progress...</span>
+            ) : phase === 'BIDDING' ? (
+              <span className="text-xs text-yellow-300">Bidding phase in progress...</span>
             ) : renderTrick.length === 0 ? <span className="text-xs text-white/50">Waiting for first card...</span> : renderTrick.map((t, idx) => {
               const trickViewSeat = toViewSeat(t.seat);
               const winnerViewSeat = toViewSeat(clearingTrickWinner ?? toGlobalSeat(0));
@@ -309,19 +367,52 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           {handLayout.map((item, idx, arr) => (
             <button
               key={item.card.id}
-              onClick={() => submit(item.card.id)}
-              disabled={state.turnIndex !== selfSeat || state.status !== 'PLAYING'}
+              onClick={() => {
+                if (phase === 'PASSING') togglePassCard(item.card.id);
+                else submit(item.card.id);
+              }}
+              disabled={state.status !== 'PLAYING'}
               className={`absolute card-fan-item animate-deal ${state.turnIndex === selfSeat ? 'cursor-pointer active:-translate-y-2' : 'opacity-70 cursor-default'}`}
               style={{
-                transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.32}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg)`,
+                transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.32 + (phase === 'PASSING' && selectedPassIds.includes(item.card.id) ? -80 : 0)}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg)`,
                 zIndex: 100 + idx,
               }}
             >
-              <CardView card={item.card} size="lg" inactive={state.turnIndex === selfSeat && state.status === 'PLAYING' && !playableIds.has(item.card.id)} />
+              <CardView
+                card={item.card}
+                size="lg"
+                inactive={phase === 'PLAYING' && state.turnIndex === selfSeat && state.status === 'PLAYING' && !playableIds.has(item.card.id)}
+                highlighted={phase === 'PASSING' && selectedPassIds.includes(item.card.id)}
+              />
             </button>
           ))}
         </div>
       </div>
+
+      {phase === 'PASSING' && state.turnIndex === selfSeat && (
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[150]">
+          <button
+            onClick={confirmPass}
+            disabled={selectedPassIds.length !== 3}
+            className={`px-6 py-3 rounded-2xl font-black uppercase tracking-widest text-sm ${selectedPassIds.length === 3 ? 'bg-yellow-500 text-black' : 'bg-white/10 text-white/50 border border-white/20'}`}
+          >
+            Confirm Pass ({selectedPassIds.length}/3)
+          </button>
+        </div>
+      )}
+
+      {phase === 'BIDDING' && state.turnIndex === selfSeat && (
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[150] bg-black/60 border border-white/10 rounded-2xl p-3">
+          <div className="text-[10px] text-white/60 font-black uppercase tracking-widest mb-2 text-center">Select Bid</div>
+          <div className="grid grid-cols-4 gap-2">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((b) => (
+              <button key={b} onClick={() => submitBid(b)} className="w-10 h-10 rounded-xl bg-yellow-500 text-black font-black">
+                {b}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {result && <div className="mt-2 text-center text-sm font-black text-green-400">{result}</div>}
     </div>
