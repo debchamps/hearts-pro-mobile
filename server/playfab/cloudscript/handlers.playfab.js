@@ -23,6 +23,9 @@ var STAT_KEYS = {
   SPADES_BEST: 'spades_best_score',
   CALLBREAK_BEST: 'callbreak_best_score'
 };
+var SUITS = ['CLUBS', 'DIAMONDS', 'SPADES', 'HEARTS'];
+var RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+var RANK_VALUE = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
 
 var cache = {
   matches: {},
@@ -119,10 +122,169 @@ function newMatch(gameType, playerName, playerId) {
     leadSuit: null,
     scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
     roundNumber: 1,
-    status: 'PLAYING',
+    status: 'WAITING',
     turnDeadlineMs: now + TIMEOUT_MS,
     serverTimeMs: now
   };
+}
+
+function buildDeck(gameType) {
+  var deck = [];
+  var si;
+  var ri;
+  for (si = 0; si < SUITS.length; si++) {
+    for (ri = 0; ri < RANKS.length; ri++) {
+      var suit = SUITS[si];
+      var rank = RANKS[ri];
+      var points = 0;
+      if (gameType === 'HEARTS') {
+        if (suit === 'HEARTS') points = 1;
+        if (suit === 'SPADES' && rank === 'Q') points = 13;
+      }
+      deck.push({
+        id: rank + '-' + suit,
+        suit: suit,
+        rank: rank,
+        value: RANK_VALUE[rank],
+        points: points
+      });
+    }
+  }
+  return deck;
+}
+
+function shuffle(deck, seed) {
+  var arr = deck.slice();
+  var x = seed % 2147483647;
+  if (x <= 0) x += 2147483646;
+  function nextRand() {
+    x = (x * 16807) % 2147483647;
+    return (x - 1) / 2147483646;
+  }
+  var i;
+  for (i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(nextRand() * (i + 1));
+    var tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function startMatchIfReady(match) {
+  if (match.status !== 'WAITING') return false;
+  var seat2Ready = isRealHumanPlayerId(match.players[2].playFabId);
+  if (!seat2Ready) return false;
+
+  var seed = Date.now();
+  var deck = shuffle(buildDeck(match.gameType), seed);
+  var seat;
+  for (seat = 0; seat < 4; seat++) {
+    match.hands[seat] = deck.slice(seat * 13, seat * 13 + 13);
+  }
+  match.seed = seed;
+  match.deck = deck;
+  match.currentTrick = [];
+  match.leadSuit = null;
+  match.turnIndex = 0;
+  match.trickLeaderIndex = 0;
+  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  match.status = 'PLAYING';
+  return true;
+}
+
+function resolveTrickWinner(match) {
+  if (!match.currentTrick || match.currentTrick.length < 4) return match.turnIndex;
+  var leadSuit = match.currentTrick[0].card.suit;
+  var trumpSuit = match.gameType === 'HEARTS' ? null : 'SPADES';
+  var winner = match.currentTrick[0];
+  var i;
+  for (i = 1; i < match.currentTrick.length; i++) {
+    var curr = match.currentTrick[i];
+    var winnerTrump = trumpSuit && winner.card.suit === trumpSuit;
+    var currTrump = trumpSuit && curr.card.suit === trumpSuit;
+    if (currTrump && !winnerTrump) {
+      winner = curr;
+      continue;
+    }
+    if (currTrump === winnerTrump) {
+      var cmpSuit = winnerTrump ? trumpSuit : leadSuit;
+      if (curr.card.suit === cmpSuit && winner.card.suit === cmpSuit && curr.card.value > winner.card.value) {
+        winner = curr;
+      }
+    }
+  }
+  return winner.seat;
+}
+
+function fallbackCard(match, seat) {
+  var hand = match.hands[seat] || [];
+  if (hand.length > 0) return hand[0];
+  return { id: '2-CLUBS', suit: 'CLUBS', rank: '2', value: 2, points: 0 };
+}
+
+function applyMove(match, seat, cardId, allowFallback) {
+  if (match.status !== 'PLAYING') throw new Error('Match not active');
+  if (match.turnIndex !== seat) throw new Error('Not your turn');
+  var hand = match.hands[seat] || [];
+  var idx = -1;
+  var i;
+  for (i = 0; i < hand.length; i++) {
+    if (hand[i].id === cardId) {
+      idx = i;
+      break;
+    }
+  }
+  var card;
+  if (idx >= 0) {
+    card = hand[idx];
+    hand.splice(idx, 1);
+  } else if (allowFallback) {
+    card = fallbackCard(match, seat);
+    // remove chosen fallback if present in hand
+    var j;
+    for (j = 0; j < hand.length; j++) {
+      if (hand[j].id === card.id) {
+        hand.splice(j, 1);
+        break;
+      }
+    }
+  } else {
+    throw new Error('Card not in hand');
+  }
+
+  match.currentTrick.push({ seat: seat, card: card });
+  if (match.currentTrick.length === 1) match.leadSuit = card.suit;
+
+  if (match.currentTrick.length < 4) {
+    match.turnIndex = (seat + 1) % 4;
+    match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+    return;
+  }
+
+  var winner = resolveTrickWinner(match);
+  var trickPoints = 0;
+  var k;
+  for (k = 0; k < match.currentTrick.length; k++) {
+    trickPoints += match.currentTrick[k].card.points || 0;
+  }
+  match.scores[winner] = (match.scores[winner] || 0) + trickPoints;
+  match.currentTrick = [];
+  match.leadSuit = null;
+  match.turnIndex = winner;
+  match.trickLeaderIndex = winner;
+  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+
+  if ((match.hands[0] || []).length === 0) {
+    match.status = 'COMPLETED';
+  }
+}
+
+function runServerTurn(match) {
+  if (match.status !== 'PLAYING') return false;
+  if (Date.now() < match.turnDeadlineMs) return false;
+  applyMove(match, match.turnIndex, '', true);
+  return true;
 }
 
 function isRealHumanPlayerId(playFabId) {
@@ -253,6 +415,7 @@ handlers.findMatch = function(args, context) {
     existing.players[2].isBot = false;
     existing.players[2].rankBadge = 'Rookie';
     existing.players[2].pingMs = 57;
+    startMatchIfReady(existing);
     bump(existing);
     saveMatch(existing, context);
     titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
@@ -293,12 +456,9 @@ handlers.joinMatch = function(args, context) {
 
 handlers.submitMove = function(args, context) {
   var match = getMatch(args.matchId, context);
-  if (match.turnIndex !== args.seat) throw new Error('Not your turn');
+  if (match.status === 'WAITING') throw new Error('Waiting for second player');
   if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
-
-  match.currentTrick.push({ seat: args.seat, card: { id: args.cardId, suit: 'CLUBS', rank: '2', value: 2, points: 0 } });
-  match.turnIndex = (match.turnIndex + 1) % 4;
-  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  applyMove(match, args.seat, args.cardId, false);
   bump(match);
   saveMatch(match, context);
   return deltaFor(match);
@@ -306,6 +466,11 @@ handlers.submitMove = function(args, context) {
 
 handlers.getState = function(args, context) {
   var match = getMatch(args.matchId, context);
+  var changed = runServerTurn(match);
+  if (changed) {
+    bump(match);
+    saveMatch(match, context);
+  }
   if (args.sinceRevision >= match.revision) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
@@ -317,10 +482,7 @@ handlers.timeoutMove = function(args, context) {
   if (Date.now() < match.turnDeadlineMs) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
-
-  match.currentTrick.push({ seat: match.turnIndex, card: { id: '2-CLUBS', suit: 'CLUBS', rank: '2', value: 2, points: 0 } });
-  match.turnIndex = (match.turnIndex + 1) % 4;
-  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
+  applyMove(match, match.turnIndex, '', true);
   bump(match);
   saveMatch(match, context);
   return deltaFor(match);

@@ -5,6 +5,7 @@ import { MultiplayerService } from './online/network/multiplayerService';
 import { MultiplayerGameState } from './online/types';
 import { PlayerStrip } from './online/ui/PlayerStrip';
 import { TurnTimer } from './online/ui/TurnTimer';
+import { getLocalPlayerName } from './online/network/playerName';
 
 export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onExit: () => void }) {
   const serviceRef = useRef<MultiplayerService>(new MultiplayerService());
@@ -18,7 +19,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     async function init() {
       try {
         setLoading(true);
-        const created = await serviceRef.current.createMatch(gameType, 'YOU');
+        const created = await serviceRef.current.createMatch(gameType, getLocalPlayerName());
         if (mounted) setState(created);
       } catch (e) {
         if (mounted) setError((e as Error).message);
@@ -34,7 +35,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   }, [gameType]);
 
   useEffect(() => {
-    if (!state || state.status !== 'PLAYING') return;
+    if (!state || state.status === 'COMPLETED') return;
     const timer = setInterval(async () => {
       try {
         const next = await serviceRef.current.pollDelta();
@@ -110,7 +111,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       <div className="flex items-center justify-between mb-3">
         <button className="px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-xs font-black uppercase" onClick={onExit}>Exit</button>
         <div className="text-xs uppercase font-black tracking-widest">{state.gameType} Online</div>
-        <TurnTimer deadlineMs={state.turnDeadlineMs} serverTimeMs={state.serverTimeMs} />
+        {state.status === 'PLAYING' ? (
+          <TurnTimer deadlineMs={state.turnDeadlineMs} serverTimeMs={state.serverTimeMs} />
+        ) : (
+          <div className="text-[10px] font-black uppercase text-yellow-300">Waiting...</div>
+        )}
       </div>
 
       <PlayerStrip players={state.players || []} activeSeat={state.turnIndex ?? 0} />
@@ -131,7 +136,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="flex gap-3 justify-center min-h-[86px] items-center">
-            {(state.currentTrick || []).length === 0 ? <span className="text-xs text-white/50">Waiting for first card...</span> : (state.currentTrick || []).map((t) => (
+            {state.status === 'WAITING' ? (
+              <span className="text-xs text-yellow-300">Waiting for second player to join...</span>
+            ) : (state.currentTrick || []).length === 0 ? <span className="text-xs text-white/50">Waiting for first card...</span> : (state.currentTrick || []).map((t) => (
               <div key={`${t.seat}-${t.card.id}`} className="flex flex-col items-center gap-1">
                 <CardView card={t.card} size="sm" />
                 <span className="text-[9px]">Seat {t.seat}</span>
