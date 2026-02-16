@@ -41,6 +41,7 @@ var cache = {
 };
 
 var EVENT_LIMIT_PER_MATCH = 256;
+var MATCH_CHUNK_SIZE = 6000;
 
 function randomId(prefix) {
   return prefix + '_' + Math.random().toString(36).slice(2, 10);
@@ -66,8 +67,60 @@ function titleDataSet(key, value) {
   } catch (e) {}
 }
 
+function titleDataSetRaw(key, value) {
+  try {
+    server.SetTitleData({ Key: key, Value: String(value) });
+  } catch (e) {}
+}
+
+function titleDataGetRaw(key) {
+  try {
+    var out = server.GetTitleData({ Keys: [key] });
+    if (!out || !out.Data) return null;
+    if (typeof out.Data[key] !== 'string') return null;
+    return out.Data[key];
+  } catch (e) {
+    return null;
+  }
+}
+
 function cloneState(obj) {
   return JSON.parse(JSON.stringify(obj));
+}
+
+function persistMatchChunked(match) {
+  try {
+    var json = JSON.stringify(match);
+    var parts = Math.max(1, Math.ceil(json.length / MATCH_CHUNK_SIZE));
+    var i;
+    for (i = 0; i < parts; i++) {
+      var start = i * MATCH_CHUNK_SIZE;
+      var end = Math.min(json.length, start + MATCH_CHUNK_SIZE);
+      titleDataSetRaw('match_' + match.matchId + '_p_' + i, json.slice(start, end));
+    }
+    titleDataSet('match_' + match.matchId + '_idx', {
+      parts: parts,
+      revision: match.revision || 0,
+      updatedAt: Date.now()
+    });
+  } catch (e) {}
+}
+
+function loadMatchChunked(matchId) {
+  var idx = titleDataGet('match_' + matchId + '_idx');
+  if (!idx || !idx.parts || idx.parts < 1) return null;
+  var parts = [];
+  var i;
+  for (i = 0; i < idx.parts; i++) {
+    var raw = titleDataGetRaw('match_' + matchId + '_p_' + i);
+    if (raw === null) return null;
+    parts.push(raw);
+  }
+  try {
+    return JSON.parse(parts.join(''));
+  } catch (e) {
+    return null;
+  }
 }
 
 function buildChangedState(before, after) {
@@ -1041,6 +1094,7 @@ function saveMatch(match, context) {
   }
   // best-effort backup only
   titleDataSet('match_' + match.matchId, match);
+  persistMatchChunked(match);
 }
 
 function getMatch(matchId, context) {
@@ -1076,6 +1130,8 @@ function getMatch(matchId, context) {
     }
   } catch (e) {}
 
+  var loadedChunked = loadMatchChunked(matchId);
+  pickNewest(loadedChunked);
   var loaded = titleDataGet('match_' + matchId);
   pickNewest(loaded);
 
