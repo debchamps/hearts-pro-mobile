@@ -15,6 +15,10 @@ export class MultiplayerService {
   private eventPumpRunning = false;
   private eventPumpInFlight = false;
   private emptyEventLoops = 0;
+  private waitingRecoveryInFlight = false;
+  private gameType: GameType | null = null;
+  private playerName = 'YOU';
+  private autoMoveOnTimeout = true;
 
   private static readonly EVENT_PUMP_FAST_MS = 35;
   private static readonly EVENT_PUMP_IDLE_MS = 110;
@@ -30,6 +34,9 @@ export class MultiplayerService {
 
   async createMatch(gameType: GameType, playerName: string, options?: { autoMoveOnTimeout?: boolean }): Promise<MultiplayerGameState> {
     const api = await this.ensureApi();
+    this.gameType = gameType;
+    this.playerName = playerName || 'YOU';
+    this.autoMoveOnTimeout = options?.autoMoveOnTimeout !== false;
     const created = api.findMatch
       ? await api.findMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout })
       : await api.createMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout });
@@ -76,6 +83,29 @@ export class MultiplayerService {
     const snapshot = await api.getSnapshot({ matchId: this.matchId, seat: this.seat });
     this.state = applyDelta(this.state, snapshot);
     return this.state!;
+  }
+
+  private async tryWaitingRecovery() {
+    if (this.waitingRecoveryInFlight || !this.gameType) return;
+    if (!this.matchId || !this.api || !this.api.findMatch) return;
+    this.waitingRecoveryInFlight = true;
+    try {
+      const found = await this.api.findMatch({
+        gameType: this.gameType,
+        playerName: this.playerName,
+        autoMoveOnTimeout: this.autoMoveOnTimeout,
+        currentMatchId: this.matchId,
+      });
+      if (found.matchId !== this.matchId) {
+        this.matchId = found.matchId;
+        this.seat = found.seat;
+        this.lastEventId = 0;
+        this.subscriptionId = null;
+        await this.resyncSnapshot();
+        this.notify([]);
+      }
+    } catch {}
+    this.waitingRecoveryInFlight = false;
   }
 
   async syncSnapshot() {
@@ -176,6 +206,9 @@ export class MultiplayerService {
             try {
               await this.resyncSnapshot();
               this.notify([]);
+              if (this.state.status === 'WAITING') {
+                await this.tryWaitingRecovery();
+              }
             } catch {}
           }
         } else {
@@ -234,6 +267,7 @@ export class MultiplayerService {
           try {
             await this.resyncSnapshot();
             this.notify([]);
+            await this.tryWaitingRecovery();
           } catch {}
         }
       } catch {

@@ -142,6 +142,40 @@ function loadMatchChunked(matchId) {
   }
 }
 
+function getJoinMarker(matchId) {
+  return titleDataGet('match_join_' + matchId);
+}
+
+function setJoinMarker(matchId, marker) {
+  titleDataSet('match_join_' + matchId, marker || {});
+}
+
+function applyJoinMarker(match) {
+  if (!match || match.status !== 'WAITING') return false;
+  var marker = getJoinMarker(match.matchId);
+  if (!marker || !marker.seat2PlayFabId) return false;
+  if (!isRealHumanPlayerId(marker.seat2PlayFabId)) return false;
+  var changed = false;
+  if (match.players[2].playFabId !== marker.seat2PlayFabId) {
+    match.players[2].playFabId = marker.seat2PlayFabId;
+    changed = true;
+  }
+  if (marker.seat2Name && match.players[2].name !== marker.seat2Name) {
+    match.players[2].name = marker.seat2Name;
+    changed = true;
+  }
+  if (match.players[2].isBot) {
+    match.players[2].isBot = false;
+    changed = true;
+  }
+  if (changed) {
+    match.players[2].rankBadge = 'Rookie';
+    match.players[2].pingMs = 57;
+    ensureTracking(match);
+  }
+  return changed;
+}
+
 function buildChangedState(before, after) {
   if (!before) return after;
   var changed = {};
@@ -424,6 +458,7 @@ function startMatchIfReady(match) {
 
 function ensureMatchStartedAndPublished(match, context) {
   if (match.status !== 'WAITING') return false;
+  applyJoinMarker(match);
   var started = startMatchIfReady(match);
   if (!started) return false;
   bump(match);
@@ -432,6 +467,7 @@ function ensureMatchStartedAndPublished(match, context) {
   EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, match);
   runServerTurnChain(match, match.revision);
   saveMatch(match, context);
+  setJoinMarker(match.matchId, {});
   return true;
 }
 
@@ -1163,6 +1199,7 @@ function getMatch(matchId, context) {
   pickNewest(loaded);
 
   if (newest) {
+    applyJoinMarker(newest);
     cache.matches[matchId] = newest;
     appendSyncDebug(matchId, 'getMatch.selected', {
       playerId: pid,
@@ -1236,8 +1273,10 @@ handlers.createLobby = function(args, context) {
 };
 
 handlers.findMatch = function(args, context) {
+  args = args || {};
   var playerId = (args && args.playFabId) || getCurrentPlayerId(context);
   var gameType = args.gameType;
+  var currentMatchId = args.currentMatchId || '';
 
   // Public quick-match queue by game type.
   var waitKey = 'waiting_' + gameType;
@@ -1258,6 +1297,11 @@ handlers.findMatch = function(args, context) {
     existing.players[2].isBot = false;
     existing.players[2].rankBadge = 'Rookie';
     existing.players[2].pingMs = 57;
+    setJoinMarker(existing.matchId, {
+      seat2PlayFabId: playerId,
+      seat2Name: existing.players[2].name || args.playerName || 'OPPONENT',
+      at: Date.now()
+    });
     ensureTracking(existing);
     existing.autoMoveOnTimeoutBySeat[2] = args.autoMoveOnTimeout !== false;
     var started = startMatchIfReady(existing);
@@ -1281,7 +1325,29 @@ handlers.findMatch = function(args, context) {
     return { matchId: existing.matchId, seat: 2, revision: existing.revision, changed: buildChangedState(beforeExisting, existing) };
   }
 
+  if (currentMatchId) {
+    try {
+      var current = getMatch(currentMatchId, context);
+      if (current && current.gameType === gameType && current.status === 'WAITING' && current.players[0] && current.players[0].playFabId === playerId) {
+        // Keep the current waiting room as the player's canonical room.
+        titleDataSet(waitKey, {
+          matchId: current.matchId,
+          ownerPlayFabId: playerId,
+          gameType: gameType,
+          createdAt: Date.now()
+        });
+        appendSyncDebug(current.matchId, 'findMatch.reuseCurrentWaiting', {
+          playerId: playerId,
+          matchId: current.matchId,
+          revision: current.revision
+        });
+        return { matchId: current.matchId, seat: 0, revision: current.revision, changed: {} };
+      }
+    } catch (e) {}
+  }
+
   var match = newMatch(gameType, args.playerName, playerId);
+  setJoinMarker(match.matchId, {});
   ensureTracking(match);
   match.autoMoveOnTimeoutBySeat[0] = args.autoMoveOnTimeout !== false;
   EventDispatcher.emit(match, 'MATCH_CREATED', -1, { status: match.status, phase: match.phase });

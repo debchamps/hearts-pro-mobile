@@ -52,7 +52,13 @@ class PlayFabCloudScriptApi implements OnlineApi {
     return this.call('createLobby', input);
   }
 
-  findMatch(input: { gameType: GameType; lobbyId?: string; playerName?: string; autoMoveOnTimeout?: boolean }) {
+  findMatch(input: {
+    gameType: GameType;
+    lobbyId?: string;
+    playerName?: string;
+    autoMoveOnTimeout?: boolean;
+    currentMatchId?: string;
+  }) {
     return this.call('findMatch', input);
   }
 

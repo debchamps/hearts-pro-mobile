@@ -78,7 +78,13 @@ export const localOnlineApi: OnlineApi = {
     return { lobbyId: `l_${input.gameType.toLowerCase()}_${Math.random().toString(36).slice(2, 8)}` };
   },
 
-  async findMatch(input: { gameType: GameType; lobbyId?: string; playerName?: string; autoMoveOnTimeout?: boolean }) {
+  async findMatch(input: {
+    gameType: GameType;
+    lobbyId?: string;
+    playerName?: string;
+    autoMoveOnTimeout?: boolean;
+    currentMatchId?: string;
+  }) {
     const created = await this.createMatch({
       gameType: input.gameType,
       playerName: input.playerName || 'YOU',
