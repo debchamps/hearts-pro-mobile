@@ -1002,8 +1002,12 @@ handlers.joinMatch = function(args, context) {
 
 handlers.submitMove = function(args, context) {
   var match = getMatch(args.matchId, context);
-  if (match.status === 'WAITING') throw new Error('Waiting for second player');
-  if (match.phase !== 'PLAYING') throw new Error('Round setup in progress');
+  if (match.status === 'WAITING') {
+    return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+  }
+  if (match.phase !== 'PLAYING') {
+    return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+  }
   if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
   applyMove(match, args.seat, args.cardId, false);
   bump(match);
