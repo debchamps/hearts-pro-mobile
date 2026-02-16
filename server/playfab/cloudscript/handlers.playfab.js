@@ -1019,6 +1019,7 @@ function saveMatch(match, context) {
   cache.matches[match.matchId] = match;
   var ownerId = match.ownerPlayFabId || getCurrentPlayerId(context);
   match.ownerPlayFabId = ownerId;
+  titleDataSet('match_owner_' + match.matchId, { ownerPlayFabId: ownerId });
   saveMatchForPlayer(ownerId, match);
   // Mirror state to all human seats so both clients can read consistently.
   var i;
@@ -1046,6 +1047,19 @@ function getMatch(matchId, context) {
     var raw = ud && ud.Data && ud.Data['match_' + matchId] && ud.Data['match_' + matchId].Value;
     if (raw) {
       pickNewest(JSON.parse(raw));
+    }
+  } catch (e) {}
+
+  // Fallback: read from owner's read-only data to avoid relying on large TitleData snapshots.
+  try {
+    var ownerRef = titleDataGet('match_owner_' + matchId);
+    var ownerId = ownerRef && ownerRef.ownerPlayFabId;
+    if (ownerId) {
+      var oud = server.GetUserReadOnlyData({ PlayFabId: ownerId, Keys: ['match_' + matchId] });
+      var oraw = oud && oud.Data && oud.Data['match_' + matchId] && oud.Data['match_' + matchId].Value;
+      if (oraw) {
+        pickNewest(JSON.parse(oraw));
+      }
     }
   } catch (e) {}
 
