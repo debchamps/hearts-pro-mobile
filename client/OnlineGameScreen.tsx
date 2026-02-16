@@ -9,6 +9,7 @@ import { applyOnlineCoinDelta } from './online/network/coinWallet';
 
 export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onExit: () => void }) {
   const serviceRef = useRef<MultiplayerService>(new MultiplayerService());
+  const pollInFlightRef = useRef(false);
   const [state, setState] = useState<MultiplayerGameState | null>(null);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -42,16 +43,26 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   useEffect(() => {
     if (!state || state.status === 'COMPLETED') return;
     const timer = setInterval(async () => {
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
       try {
         const next = await serviceRef.current.pollDelta();
-        if (next) setState({ ...next });
+        if (next) {
+          setState((prev) => {
+            if (!prev) return { ...next };
+            if ((next.revision || 0) < (prev.revision || 0)) return prev;
+            return { ...next };
+          });
+        }
       } catch (e) {
         setError((e as Error).message);
+      } finally {
+        pollInFlightRef.current = false;
       }
-    }, 150);
+    }, 180);
 
     return () => clearInterval(timer);
-  }, [state]);
+  }, [state?.matchId, state?.status]);
 
   const showMessage = (text: string, ms = 1500) => {
     setMessage(text);
@@ -93,7 +104,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         setRenderTrick([]);
         setClearingTrickWinner(null);
         clearTimerRef.current = null;
-      }, 420);
+      }, 800);
       return;
     }
 
@@ -104,7 +115,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         setRenderTrick([]);
         setClearingTrickWinner(null);
         clearTimerRef.current = null;
-      }, 420);
+      }, 800);
     }
   }, [state?.revision, state?.turnIndex, renderTrick, clearingTrickWinner, state]);
 
@@ -123,7 +134,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     if (!state) return [];
     const hands = (state as any).hands || {};
     const scores = (state as any).scores || {};
-    const trickWins = (state as any).trickWins || {};
+    const trickWins = (state as any).trickWins || (state as any).tricksWon || {};
+    const bids = (state as any).bids || {};
     const players = Array.isArray((state as any).players) ? (state as any).players : [];
 
     return players.map((p: any) => ({
@@ -134,6 +146,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       score: scores[p.seat] || 0,
       currentRoundScore: 0,
       isHuman: !p.isBot,
+      bid: bids[p.seat] ?? bids[String(p.seat)] ?? undefined,
       tricksWon: trickWins[p.seat] || 0,
       teamId: p.teamId,
     })).sort((a, b) => toViewSeat(a.id) - toViewSeat(b.id));
@@ -352,7 +365,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
                     '--start-y': `${startPos.y}px`,
                     '--clear-x': `${winDir.x}px`,
                     '--clear-y': `${winDir.y}px`,
-                    animationDuration: clearingTrickWinner !== null ? '420ms' : '240ms',
+                    animationDuration: clearingTrickWinner !== null ? '800ms' : '360ms',
                     zIndex: 10 + idx,
                   } as any}
                 >
@@ -404,7 +417,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       )}
 
       {phase === 'BIDDING' && state.turnIndex === selfSeat && (
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[150] bg-black/60 border border-white/10 rounded-2xl p-3">
+        <div className="absolute left-1/2 -translate-x-1/2 z-[180] bg-black/75 border border-white/15 rounded-2xl p-3"
+          style={{ bottom: 'calc(max(1rem, var(--safe-bottom)) + 150px)' }}>
           <div className="text-[10px] text-white/60 font-black uppercase tracking-widest mb-2 text-center">Select Bid</div>
           <div className={`grid gap-2 ${gameType === 'SPADES' ? 'grid-cols-5' : 'grid-cols-4'}`}>
             {(gameType === 'SPADES' ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] : [1, 2, 3, 4, 5, 6, 7, 8]).map((b) => (
