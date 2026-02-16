@@ -7,6 +7,7 @@ import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, ScorecardModal
 import { persistenceService } from './services/persistence';
 import { leaderboardService } from './services/leaderboardService';
 import { OnlineGameScreen } from './client/OnlineGameScreen';
+import { sortCardsBySuitThenRankAsc } from './services/cardSort';
 
 const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
@@ -119,10 +120,7 @@ export function SpadesGame({ initialPlayers, initialState, onExit, soundEnabled,
     const deck = shuffle(createDeck(gameState.settings));
     const players = gameState.players.map((p, i) => ({
       ...p,
-      hand: deck.slice(i * 13, (i + 1) * 13).sort((a, b) => {
-        if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-        return b.value - a.value;
-      }),
+      hand: sortCardsBySuitThenRankAsc(deck.slice(i * 13, (i + 1) * 13)),
       tricksWon: 0,
       bid: undefined
     }));

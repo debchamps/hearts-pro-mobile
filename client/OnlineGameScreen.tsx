@@ -6,6 +6,9 @@ import { MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
 import { applyOnlineCoinDelta } from './online/network/coinWallet';
+import { getCallbreakAutoMoveOnTimeout } from './online/network/callbreakOnlinePrefs';
+import { getOnlineTurnDurationMs } from './online/config';
+import { sortCardsBySuitThenRankAsc } from '../services/cardSort';
 
 export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onExit: () => void }) {
   const serviceRef = useRef<MultiplayerService>(new MultiplayerService());
@@ -17,6 +20,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const [message, setMessage] = useState<string>('');
   const [renderTrick, setRenderTrick] = useState<Array<{ seat: number; card: any }>>([]);
   const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
+  const [clockMs, setClockMs] = useState<number>(Date.now());
   const clearTimerRef = useRef<number | null>(null);
   const lastCompletedAtRef = useRef<number>(0);
 
@@ -25,7 +29,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     async function init() {
       try {
         setLoading(true);
-        const created = await serviceRef.current.createMatch(gameType, getLocalPlayerName());
+        const created = await serviceRef.current.createMatch(gameType, getLocalPlayerName(), {
+          autoMoveOnTimeout: gameType === 'CALLBREAK' ? getCallbreakAutoMoveOnTimeout() : true,
+        });
         if (mounted) setState(created);
       } catch (e) {
         if (mounted) setError((e as Error).message);
@@ -63,6 +69,12 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
     return () => clearInterval(timer);
   }, [state?.matchId, state?.status]);
+
+  useEffect(() => {
+    if (gameType !== 'CALLBREAK') return;
+    const timer = window.setInterval(() => setClockMs(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [gameType]);
 
   const showMessage = (text: string, ms = 1500) => {
     setMessage(text);
@@ -127,7 +139,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const hand = useMemo(() => {
     if (!state) return [];
     const hands = (state as any).hands || {};
-    return hands[selfSeat] || [];
+    return sortCardsBySuitThenRankAsc(hands[selfSeat] || []);
   }, [state, selfSeat]);
 
   const avatarPlayers: Player[] = useMemo(() => {
@@ -307,11 +319,18 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         <button className="px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-xs font-black uppercase" onClick={onExit}>Exit</button>
         <div className="text-sm uppercase font-black tracking-widest">{state.gameType} Online</div>
         {state.status === 'PLAYING' ? (
-          <TurnTimer
-            deadlineMs={state.turnDeadlineMs}
-            serverTimeMs={state.serverTimeMs}
-            durationMs={(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected) ? 900 : 9000}
-          />
+          gameType === 'CALLBREAK' ? (
+            <div className="text-[10px] font-black uppercase text-yellow-300">Turn</div>
+          ) : (
+            <TurnTimer
+              deadlineMs={state.turnDeadlineMs}
+              serverTimeMs={state.serverTimeMs}
+              durationMs={getOnlineTurnDurationMs(
+                gameType,
+                !!(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected)
+              )}
+            />
+          )
         ) : (
           <div className="text-[10px] font-black uppercase text-yellow-300">Waiting...</div>
         )}
@@ -342,6 +361,14 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               active={toViewSeat(state.turnIndex ?? 0) === viewSeat}
               phase="PLAYING"
               gameType={gameType}
+              turnProgress={gameType === 'CALLBREAK' && state.status === 'PLAYING' && toViewSeat(state.turnIndex ?? 0) === viewSeat ? Math.max(
+                0,
+                Math.min(
+                  1,
+                  (state.turnDeadlineMs - clockMs) /
+                    getOnlineTurnDurationMs(gameType, !!(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected))
+                )
+              ) : undefined}
             />
           );
         })}

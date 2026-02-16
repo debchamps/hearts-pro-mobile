@@ -1,5 +1,6 @@
 import { createDeck } from '../../../constants';
 import { Card, GameType, Suit } from '../../../types';
+import { sortCardsBySuitThenRankAsc } from '../../../services/cardSort';
 import { getRules } from '../rules';
 import { GameStateDelta, MatchConfig, MatchResult, MultiplayerGameState, OnlinePlayerMeta } from '../types';
 import { seededShuffle } from '../utils';
@@ -29,9 +30,7 @@ export function createInitialState(matchId: string, config: MatchConfig): Multip
 
   const hands: Record<number, Card[]> = { 0: [], 1: [], 2: [], 3: [] };
   for (let seat = 0; seat < 4; seat++) {
-    hands[seat] = deck
-      .slice(seat * 13, seat * 13 + 13)
-      .sort((a, b) => (a.suit === b.suit ? a.value - b.value : a.suit.localeCompare(b.suit)));
+    hands[seat] = sortCardsBySuitThenRankAsc(deck.slice(seat * 13, seat * 13 + 13));
   }
 
   return {

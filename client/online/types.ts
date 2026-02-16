@@ -83,8 +83,8 @@ export interface ReconnectPayload {
 
 export interface OnlineApi {
   createLobby?(input: { gameType: GameType; region?: string }): Promise<{ lobbyId: string }>;
-  findMatch?(input: { gameType: GameType; lobbyId?: string; playerName?: string }): Promise<{ matchId: string; seat: number }>;
-  createMatch(input: { gameType: GameType; playerName: string }): Promise<{ matchId: string; seat: number }>;
+  findMatch?(input: { gameType: GameType; lobbyId?: string; playerName?: string; autoMoveOnTimeout?: boolean }): Promise<{ matchId: string; seat: number }>;
+  createMatch(input: { gameType: GameType; playerName: string; autoMoveOnTimeout?: boolean }): Promise<{ matchId: string; seat: number }>;
   joinMatch(input: { matchId: string; playerName: string }): Promise<{ seat: number }>;
   submitMove(input: MoveSubmission): Promise<GameStateDelta>;
   submitPass?(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }): Promise<GameStateDelta>;

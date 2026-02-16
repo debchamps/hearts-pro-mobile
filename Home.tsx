@@ -8,6 +8,7 @@ import { Overlay } from './SharedComponents';
 import { Preferences } from '@capacitor/preferences';
 import { DebugAuthMode, getDebugAuthMode, setDebugAuthMode } from './client/online/network/authMode';
 import { getOnlineCoins, ONLINE_COIN_EVENT } from './client/online/network/coinWallet';
+import { getCallbreakAutoMoveOnTimeout, setCallbreakAutoMoveOnTimeout } from './client/online/network/callbreakOnlinePrefs';
 
 const GAMES_LIST = [
   { id: 'hearts', name: 'Hearts', icon: '♥️', available: true, color: 'text-red-600' },
@@ -37,6 +38,7 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
   const [authMode, setAuthMode] = useState<DebugAuthMode>('GOOGLE');
   const [activeMode, setActiveMode] = useState<'ONLINE' | 'OFFLINE'>('ONLINE');
   const [onlineCoins, setOnlineCoins] = useState<number>(getOnlineCoins());
+  const [callbreakAutoMove, setCallbreakAutoMove] = useState<boolean>(getCallbreakAutoMoveOnTimeout());
 
   useEffect(() => {
     leaderboardService.syncPendingScores();
@@ -173,16 +175,36 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
                   <div className="flex flex-col items-center w-full gap-2">
                     <span className="text-lg font-black uppercase tracking-tight text-white mb-1">{game.name}</span>
                     {game.available ? (
-                      <button
-                        onClick={() => {
-                          const type = game.id.toUpperCase() as GameType;
-                          if (activeMode === 'ONLINE') onSelectOnlineGame(type);
-                          else onSelectGame(type);
-                        }}
-                        className={`w-full py-2 rounded-xl text-black text-[8px] font-black uppercase tracking-widest active:scale-95 ${activeMode === 'ONLINE' ? 'bg-cyan-500' : 'bg-green-500'}`}
-                      >
-                        {activeMode === 'ONLINE' ? 'Play Online' : 'Play Offline'}
-                      </button>
+                      <>
+                        <button
+                          onClick={() => {
+                            const type = game.id.toUpperCase() as GameType;
+                            if (activeMode === 'ONLINE') onSelectOnlineGame(type);
+                            else onSelectGame(type);
+                          }}
+                          className={`w-full py-2 rounded-xl text-black text-[8px] font-black uppercase tracking-widest active:scale-95 ${activeMode === 'ONLINE' ? 'bg-cyan-500' : 'bg-green-500'}`}
+                        >
+                          {activeMode === 'ONLINE' ? 'Play Online' : 'Play Offline'}
+                        </button>
+                        {activeMode === 'ONLINE' && game.id === 'callbreak' && (
+                          <div className="w-full mt-1.5 px-2 py-1.5 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                            <span className="text-[8px] font-black uppercase tracking-widest text-white/75">Auto Move</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = !callbreakAutoMove;
+                                setCallbreakAutoMove(next);
+                                setCallbreakAutoMoveOnTimeout(next);
+                              }}
+                              className={`relative w-11 h-6 rounded-full transition-colors ${callbreakAutoMove ? 'bg-cyan-500' : 'bg-white/25'}`}
+                              aria-label="Auto Move"
+                              aria-pressed={callbreakAutoMove}
+                            >
+                              <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${callbreakAutoMove ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                            </button>
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <span className="text-[8px] font-black uppercase tracking-widest text-yellow-500/80">Coming Soon</span>
                     )}

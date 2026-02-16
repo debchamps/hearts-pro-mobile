@@ -40,7 +40,7 @@ export const CardView = memo(({ card, size = 'md', inactive = false, highlighted
   );
 });
 
-export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase, onClick, emojisEnabled = true }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase, onClick?: () => void, emojisEnabled?: boolean }) => {
+export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 'HEARTS', phase, onClick, emojisEnabled = true, turnProgress }: { player: Player, pos: string, active: boolean, isWinner?: boolean, gameType?: GameType, phase: GamePhase, onClick?: () => void, emojisEnabled?: boolean, turnProgress?: number }) => {
   const isSpades = gameType === 'SPADES' || gameType === 'CALLBREAK';
   const isTeamBlue = gameType === 'SPADES' && player.teamId === 0;
   
@@ -70,6 +70,18 @@ export const Avatar = memo(({ player, pos, active, isWinner = false, gameType = 
 
       <div className="relative">
         <div className={`relative w-16 h-16 rounded-3xl flex items-center justify-center text-4xl shadow-2xl border-4 transition-all duration-500 backdrop-blur-md overflow-hidden ${isWinner ? 'winner-glow bg-yellow-400 border-yellow-200' : `${teamBg} ${teamColor} ${teamGlow}`} ${active ? 'ring-4 ring-yellow-400/50' : ''}`}>
+          {typeof turnProgress === 'number' && (
+            <div
+              className="absolute inset-0 rounded-3xl pointer-events-none"
+              style={{
+                padding: '3px',
+                background: `conic-gradient(from -90deg, rgba(250, 204, 21, 0.98) ${Math.max(0, Math.min(1, turnProgress)) * 360}deg, rgba(255,255,255,0.08) 0deg)`,
+                WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+                WebkitMaskComposite: 'xor',
+                maskComposite: 'exclude',
+              } as React.CSSProperties}
+            />
+          )}
           {isCustomImage ? (
             <img src={player.avatar} className="w-full h-full object-cover" alt="Avatar" />
           ) : (

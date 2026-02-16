@@ -6,6 +6,7 @@ var ENTRY_FEE = 50;
 var REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
 var HUMAN_TIMEOUT_MS = 9000;
 var BOT_TIMEOUT_MS = 900;
+var CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS = 5000;
 var DEFAULT_REGION = 'US';
 var DEFAULT_CURRENCY_ID = 'CO';
 var QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
@@ -27,6 +28,7 @@ var STAT_KEYS = {
 var SUITS = ['CLUBS', 'DIAMONDS', 'SPADES', 'HEARTS'];
 var RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 var RANK_VALUE = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
+var SUIT_PRIORITY = { CLUBS: 0, DIAMONDS: 1, SPADES: 2, HEARTS: 3 };
 
 var cache = {
   matches: {},
@@ -131,6 +133,7 @@ function newMatch(gameType, playerName, playerId) {
     playedBySuit: { CLUBS: 0, DIAMONDS: 0, HEARTS: 0, SPADES: 0 },
     playedCardIds: {},
     passingSelections: { 0: [], 1: [], 2: [], 3: [] },
+    autoMoveOnTimeoutBySeat: { 0: true, 1: true, 2: true, 3: true },
     passingDirection: 'LEFT',
     turnDeadlineMs: now + HUMAN_TIMEOUT_MS,
     serverTimeMs: now
@@ -142,13 +145,30 @@ function ensureTracking(match) {
   if (!match.playedCardIds) match.playedCardIds = {};
   if (match.heartsBroken === undefined || match.heartsBroken === null) match.heartsBroken = false;
   if (!match.tricksWon) match.tricksWon = { 0: 0, 1: 0, 2: 0, 3: 0 };
+  if (!match.autoMoveOnTimeoutBySeat) match.autoMoveOnTimeoutBySeat = { 0: true, 1: true, 2: true, 3: true };
+  if (match.autoMoveOnTimeoutBySeat[0] === undefined) match.autoMoveOnTimeoutBySeat[0] = true;
+  if (match.autoMoveOnTimeoutBySeat[1] === undefined) match.autoMoveOnTimeoutBySeat[1] = true;
+  if (match.autoMoveOnTimeoutBySeat[2] === undefined) match.autoMoveOnTimeoutBySeat[2] = true;
+  if (match.autoMoveOnTimeoutBySeat[3] === undefined) match.autoMoveOnTimeoutBySeat[3] = true;
 }
 
 function getTurnTimeout(match, seat) {
   var p = match.players[seat];
   if (!p) return HUMAN_TIMEOUT_MS;
   var isBotTurn = !!p.isBot || !!p.disconnected;
+  if (!isBotTurn && match.gameType === 'CALLBREAK') {
+    return HUMAN_TIMEOUT_MS + CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS;
+  }
   return isBotTurn ? BOT_TIMEOUT_MS : HUMAN_TIMEOUT_MS;
+}
+
+function compareHandCards(a, b) {
+  if (a.suit !== b.suit) return SUIT_PRIORITY[a.suit] - SUIT_PRIORITY[b.suit];
+  return a.value - b.value;
+}
+
+function sortHandCards(cards) {
+  return (cards || []).slice().sort(compareHandCards);
 }
 
 function buildDeck(gameType) {
@@ -203,7 +223,7 @@ function startMatchIfReady(match) {
   var deck = shuffle(buildDeck(match.gameType), seed);
   var seat;
   for (seat = 0; seat < 4; seat++) {
-    match.hands[seat] = deck.slice(seat * 13, seat * 13 + 13);
+    match.hands[seat] = sortHandCards(deck.slice(seat * 13, seat * 13 + 13));
   }
   match.seed = seed;
   match.deck = deck;
@@ -260,10 +280,7 @@ function finalizePassing(match) {
   }
 
   for (seat = 0; seat < 4; seat++) {
-    match.hands[seat] = (match.hands[seat] || []).sort(function(a, b) {
-      if (a.suit === b.suit) return a.value - b.value;
-      return String(a.suit).localeCompare(String(b.suit));
-    });
+    match.hands[seat] = sortHandCards(match.hands[seat] || []);
   }
   match.passingSelections = { 0: [], 1: [], 2: [], 3: [] };
   match.phase = 'PLAYING';
@@ -801,6 +818,7 @@ function applyMove(match, seat, cardId, allowFallback) {
 
 function runServerTurn(match) {
   if (match.status !== 'PLAYING') return false;
+  ensureTracking(match);
   if (!match.phase) match.phase = 'PLAYING';
   if (Date.now() < match.turnDeadlineMs) return false;
   if (match.phase === 'PASSING') {
@@ -828,8 +846,19 @@ function runServerTurn(match) {
     return true;
   }
 
-  var cardId = chooseBotCard(match, match.turnIndex);
-  applyMove(match, match.turnIndex, cardId, true);
+  var turnSeat = match.turnIndex;
+  var isHumanTurn = !isSeatBotOrDisconnected(match, turnSeat);
+  if (isHumanTurn) {
+    if (match.gameType !== 'CALLBREAK') return false;
+    if (match.autoMoveOnTimeoutBySeat[turnSeat] === false) {
+      match.players[turnSeat].disconnected = true;
+      match.players[turnSeat].disconnectedAt = Date.now();
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, turnSeat);
+      return true;
+    }
+  }
+  var cardId = chooseBotCard(match, turnSeat);
+  applyMove(match, turnSeat, cardId, true);
   return true;
 }
 
@@ -961,6 +990,8 @@ handlers.findMatch = function(args, context) {
     existing.players[2].isBot = false;
     existing.players[2].rankBadge = 'Rookie';
     existing.players[2].pingMs = 57;
+    ensureTracking(existing);
+    existing.autoMoveOnTimeoutBySeat[2] = args.autoMoveOnTimeout !== false;
     startMatchIfReady(existing);
     bump(existing);
     saveMatch(existing, context);
@@ -969,6 +1000,8 @@ handlers.findMatch = function(args, context) {
   }
 
   var match = newMatch(gameType, args.playerName, playerId);
+  ensureTracking(match);
+  match.autoMoveOnTimeoutBySeat[0] = args.autoMoveOnTimeout !== false;
   saveMatch(match, context);
   titleDataSet(waitKey, {
     matchId: match.matchId,
@@ -982,6 +1015,8 @@ handlers.findMatch = function(args, context) {
 handlers.createMatch = function(args, context) {
   var playerId = getCurrentPlayerId(context);
   var match = newMatch(args.gameType, args.playerName, playerId);
+  ensureTracking(match);
+  match.autoMoveOnTimeoutBySeat[0] = args.autoMoveOnTimeout !== false;
 
   setCoins(playerId, getCoins(playerId) - ENTRY_FEE);
   getStats(playerId)[STAT_KEYS.COINS] = getCoins(playerId);
@@ -1105,8 +1140,16 @@ handlers.timeoutMove = function(args, context) {
   if (Date.now() < match.turnDeadlineMs) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
-  var timeoutCard = chooseBotCard(match, match.turnIndex);
-  applyMove(match, match.turnIndex, timeoutCard, true);
+  var turnSeat = match.turnIndex;
+  var isHumanTurn = !isSeatBotOrDisconnected(match, turnSeat);
+  if (isHumanTurn && match.gameType === 'CALLBREAK' && match.autoMoveOnTimeoutBySeat[turnSeat] === false) {
+    match.players[turnSeat].disconnected = true;
+    match.players[turnSeat].disconnectedAt = Date.now();
+    match.turnDeadlineMs = Date.now() + getTurnTimeout(match, turnSeat);
+  } else {
+    var timeoutCard = chooseBotCard(match, turnSeat);
+    applyMove(match, turnSeat, timeoutCard, true);
+  }
   bump(match);
   saveMatch(match, context);
   return deltaFor(match);

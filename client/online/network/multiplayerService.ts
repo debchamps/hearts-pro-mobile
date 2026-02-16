@@ -16,11 +16,11 @@ export class MultiplayerService {
     return this.api;
   }
 
-  async createMatch(gameType: GameType, playerName: string): Promise<MultiplayerGameState> {
+  async createMatch(gameType: GameType, playerName: string, options?: { autoMoveOnTimeout?: boolean }): Promise<MultiplayerGameState> {
     const api = await this.ensureApi();
     const created = api.findMatch
-      ? await api.findMatch({ gameType, playerName })
-      : await api.createMatch({ gameType, playerName });
+      ? await api.findMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout })
+      : await api.createMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout });
 
     this.matchId = created.matchId;
     this.seat = created.seat;

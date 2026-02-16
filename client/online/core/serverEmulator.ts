@@ -49,12 +49,16 @@ export const localOnlineApi: OnlineApi = {
     return { lobbyId: `l_${input.gameType.toLowerCase()}_${Math.random().toString(36).slice(2, 8)}` };
   },
 
-  async findMatch(input: { gameType: GameType; lobbyId?: string; playerName?: string }) {
-    const created = await this.createMatch({ gameType: input.gameType, playerName: input.playerName || 'YOU' });
+  async findMatch(input: { gameType: GameType; lobbyId?: string; playerName?: string; autoMoveOnTimeout?: boolean }) {
+    const created = await this.createMatch({
+      gameType: input.gameType,
+      playerName: input.playerName || 'YOU',
+      autoMoveOnTimeout: input.autoMoveOnTimeout,
+    });
     return { matchId: created.matchId, seat: created.seat };
   },
 
-  async createMatch(input: { gameType: GameType; playerName: string }) {
+  async createMatch(input: { gameType: GameType; playerName: string; autoMoveOnTimeout?: boolean }) {
     const matchId = createMatchId();
     const state = createInitialState(matchId, {
       gameType: input.gameType,
