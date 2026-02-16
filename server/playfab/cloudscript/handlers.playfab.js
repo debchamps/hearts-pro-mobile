@@ -136,6 +136,10 @@ var SubscriptionManager = {
     };
     return subId;
   },
+  isActive: function(matchId, subId) {
+    var store = SubscriptionManager.ensure(matchId);
+    return !!store[subId];
+  },
   unsubscribe: function(matchId, subId) {
     var store = SubscriptionManager.ensure(matchId);
     delete store[subId];
@@ -1274,7 +1278,10 @@ handlers.getState = function(args, context) {
 handlers.subscribeToMatch = function(args, context) {
   var match = getMatch(args.matchId, context);
   var playerId = getCurrentPlayerId(context);
-  var subscriptionId = SubscriptionManager.subscribe(match.matchId, playerId);
+  var requestedSub = args && args.subscriptionId;
+  var subscriptionId = (requestedSub && SubscriptionManager.isActive(match.matchId, requestedSub))
+    ? requestedSub
+    : SubscriptionManager.subscribe(match.matchId, playerId);
   var sinceEventId = Number((args && args.sinceEventId) || 0);
   var events = EventDispatcher.since(match.matchId, sinceEventId);
   return {

@@ -265,9 +265,12 @@ export function subscribeToMatch(args, context = {}) {
   const match = assertMatch(args.matchId);
   const stream = ensureEventStream(match.matchId);
   if (!stateStore.subscriptions.has(match.matchId)) stateStore.subscriptions.set(match.matchId, {});
-  const subscriptionId = randomId('sub');
   const bucket = stateStore.subscriptions.get(match.matchId);
-  bucket[subscriptionId] = { playerId: context?.currentPlayerId || 'LOCAL_PLAYER', createdAt: Date.now() };
+  const requestedId = args.subscriptionId && bucket[args.subscriptionId] ? args.subscriptionId : null;
+  const subscriptionId = requestedId || randomId('sub');
+  if (!requestedId) {
+    bucket[subscriptionId] = { playerId: context?.currentPlayerId || 'LOCAL_PLAYER', createdAt: Date.now() };
+  }
   const sinceEventId = Number(args.sinceEventId || 0);
   return {
     subscriptionId,

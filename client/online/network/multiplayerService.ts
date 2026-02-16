@@ -11,6 +11,8 @@ export class MultiplayerService {
   private subscriptionId: string | null = null;
   private lastEventId = 0;
   private listeners = new Set<(state: MultiplayerGameState, events: MatchEvent[]) => void>();
+  private eventPumpTimer: number | null = null;
+  private eventPumpRunning = false;
 
   private async ensureApi() {
     if (!this.api) {
@@ -67,29 +69,73 @@ export class MultiplayerService {
       matchId: this.matchId,
       sinceEventId: this.lastEventId,
       seat: this.seat,
+      subscriptionId: this.subscriptionId ?? undefined,
     });
     this.subscriptionId = res.subscriptionId;
     this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
-    if (res.events.length > 0) {
-      const latest = res.events[res.events.length - 1];
-      this.state = applyDelta(this.state, {
-        matchId: latest.matchId,
-        revision: latest.revision,
-        changed: latest.delta,
-        serverTimeMs: latest.timestamp,
-      });
-      this.notify(res.events);
-    } else if (this.state) {
-      listener(this.state, []);
-    }
+    this.applyEvents(res.events);
+    if (this.state) listener(this.state, res.events);
+    this.startEventPump();
   }
 
   async unsubscribeFromMatch(listener?: (state: MultiplayerGameState, events: MatchEvent[]) => void) {
     if (listener) this.listeners.delete(listener);
+    if (this.listeners.size === 0) this.stopEventPump();
     if (!this.matchId || !this.subscriptionId || this.listeners.size > 0) return;
     const api = await this.ensureApi();
     await api.unsubscribeFromMatch({ matchId: this.matchId, subscriptionId: this.subscriptionId });
     this.subscriptionId = null;
+  }
+
+  private applyEvents(events: MatchEvent[]) {
+    if (!events.length) return;
+    for (const evt of events) {
+      this.state = applyDelta(this.state, {
+        matchId: evt.matchId,
+        revision: evt.revision,
+        changed: evt.delta,
+        serverTimeMs: evt.timestamp,
+      });
+    }
+    this.notify(events);
+  }
+
+  private startEventPump() {
+    if (this.eventPumpRunning) return;
+    this.eventPumpRunning = true;
+    const tick = async () => {
+      if (!this.eventPumpRunning || !this.matchId || !this.subscriptionId) return;
+      try {
+        const api = await this.ensureApi();
+        const res = await api.subscribeToMatch({
+          matchId: this.matchId,
+          sinceEventId: this.lastEventId,
+          seat: this.seat,
+          subscriptionId: this.subscriptionId,
+        });
+        this.subscriptionId = res.subscriptionId;
+        this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
+        this.applyEvents(res.events || []);
+      } catch {
+        try {
+          await this.resyncSnapshot();
+          this.notify([]);
+        } catch {}
+      } finally {
+        if (this.eventPumpRunning) {
+          this.eventPumpTimer = window.setTimeout(tick, 220);
+        }
+      }
+    };
+    this.eventPumpTimer = window.setTimeout(tick, 220);
+  }
+
+  private stopEventPump() {
+    this.eventPumpRunning = false;
+    if (this.eventPumpTimer !== null) {
+      window.clearTimeout(this.eventPumpTimer);
+      this.eventPumpTimer = null;
+    }
   }
 
   async submitMove(cardId: string): Promise<MultiplayerGameState> {

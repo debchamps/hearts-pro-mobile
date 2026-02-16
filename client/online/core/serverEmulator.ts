@@ -138,8 +138,11 @@ export const localOnlineApi: OnlineApi = {
   async subscribeToMatch(input): Promise<MatchSubscriptionResult> {
     const store = matches.get(input.matchId);
     if (!store) throw new Error('Match not found');
-    const subscriptionId = createSubscriptionId();
-    store.subscriptions[subscriptionId] = String(input.seat ?? 0);
+    const requestedId = input.subscriptionId && store.subscriptions[input.subscriptionId] ? input.subscriptionId : null;
+    const subscriptionId = requestedId || createSubscriptionId();
+    if (!requestedId) {
+      store.subscriptions[subscriptionId] = String(input.seat ?? 0);
+    }
     const sinceEventId = input.sinceEventId || 0;
     const events = store.events.filter((event) => event.eventId > sinceEventId);
     return {

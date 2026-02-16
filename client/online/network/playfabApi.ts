@@ -80,7 +80,7 @@ class PlayFabCloudScriptApi implements OnlineApi {
     return this.call('getSnapshot', input);
   }
 
-  subscribeToMatch(input: { matchId: string; sinceEventId?: number; seat?: number }) {
+  subscribeToMatch(input: { matchId: string; sinceEventId?: number; seat?: number; subscriptionId?: string }) {
     return this.call('subscribeToMatch', input);
   }
 
