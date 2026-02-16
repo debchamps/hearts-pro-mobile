@@ -4,6 +4,7 @@ import { GameState, Card, GamePhase, Player, Suit, HistoryItem, TrickCard, Playe
 import { createDeck, shuffle } from './constants';
 import { getBestMove } from './services/heartsAi';
 import { i18n } from './services/i18n';
+import { sortCardsBySuitThenRankAsc } from './services/cardSort';
 import { Avatar, CardView, Overlay, HistoryModal, HowToPlayModal, AvatarSelectionModal } from './SharedComponents';
 import { persistenceService } from './services/persistence';
 import { OnlineGameScreen } from './client/OnlineGameScreen';
@@ -119,10 +120,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled,
     const deck = shuffle(createDeck(gameState.settings));
     const players = gameState.players.map((p, i) => ({
       ...p,
-      hand: deck.slice(i * 13, (i + 1) * 13).sort((a, b) => {
-        if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-        return b.value - a.value;
-      }),
+      hand: sortCardsBySuitThenRankAsc(deck.slice(i * 13, (i + 1) * 13)),
       currentRoundScore: 0
     }));
 
@@ -177,10 +175,7 @@ export function HeartsGame({ initialPlayers, initialState, onExit, soundEnabled,
         const targets = cycle === 0 ? [1, 2, 3, 0] : cycle === 1 ? [3, 0, 1, 2] : [2, 3, 0, 1];
         passes.forEach((cards, sourceIdx) => {
           const targetIdx = targets[sourceIdx];
-          players[targetIdx].hand = [...players[targetIdx].hand, ...cards].sort((a, b) => {
-            if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-            return b.value - a.value;
-          });
+          players[targetIdx].hand = sortCardsBySuitThenRankAsc([...players[targetIdx].hand, ...cards]);
         });
 
         let starter = 0;
