@@ -38,7 +38,7 @@ function ensureEventStream(matchId) {
   return stateStore.events.get(matchId);
 }
 
-function emitEvent(match, type, delta = {}) {
+function emitEvent(match, type, actorSeat = -1, payload = {}) {
   const stream = ensureEventStream(match.matchId);
   const evt = {
     eventId: stream.nextEventId++,
@@ -46,7 +46,8 @@ function emitEvent(match, type, delta = {}) {
     matchId: match.matchId,
     revision: match.revision,
     timestamp: Date.now(),
-    delta,
+    actorSeat,
+    payload,
   };
   stream.events.push(evt);
   if (stream.events.length > 200) stream.events.splice(0, stream.events.length - 200);
@@ -171,7 +172,7 @@ export function createMatch(args, context = {}) {
   setCoins(playerId, getCoins(playerId) - ENTRY_FEE);
   setStat(playerId, STAT_KEYS.COINS, getCoins(playerId));
   stateStore.matches.set(match.matchId, match);
-  emitEvent(match, 'MATCH_STARTED', match);
+  emitEvent(match, 'MATCH_CREATED', -1, { status: match.status });
   persistMatchSnapshot(match);
   return { matchId: match.matchId, seat: 0 };
 }
@@ -247,7 +248,7 @@ export function submitMove(args) {
   match.turnIndex = (match.turnIndex + 1) % 4;
   match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
   bump(match);
-  emitEvent(match, 'CARD_PLAYED', match);
+  emitEvent(match, 'CARD_PLAYED', args.seat, match);
   persistMatchSnapshot(match);
   return deltaFor(match);
 }
@@ -301,7 +302,7 @@ export function timeoutMove(args) {
   match.turnIndex = (match.turnIndex + 1) % 4;
   match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
   bump(match);
-  emitEvent(match, 'TURN_CHANGED', match);
+  emitEvent(match, 'TURN_CHANGED', match.turnIndex, match);
   persistMatchSnapshot(match);
   return deltaFor(match);
 }
@@ -345,7 +346,7 @@ export function reconnect(args) {
   match.players[seat].disconnected = false;
   delete match.players[seat].disconnectedAt;
   bump(match);
-  emitEvent(match, 'PLAYER_RECONNECTED', match);
+  emitEvent(match, 'PLAYER_RECONNECTED', seat, match);
   persistMatchSnapshot(match);
   return { seat, delta: deltaFor(match) };
 }

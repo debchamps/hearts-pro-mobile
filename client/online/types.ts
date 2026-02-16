@@ -52,14 +52,19 @@ export interface GameStateDelta {
 }
 
 export type MatchEventType =
+  | 'MATCH_CREATED'
   | 'MATCH_STARTED'
-  | 'TURN_CHANGED'
+  | 'CARDS_DISTRIBUTED'
+  | 'BID_SUBMITTED'
+  | 'BIDDING_COMPLETED'
   | 'CARD_PLAYED'
+  | 'TURN_CHANGED'
   | 'TRICK_COMPLETED'
   | 'ROUND_COMPLETED'
   | 'MATCH_COMPLETED'
   | 'PLAYER_DISCONNECTED'
-  | 'PLAYER_RECONNECTED';
+  | 'PLAYER_RECONNECTED'
+  | 'BOT_ACTION';
 
 export interface MatchEvent {
   eventId: number;
@@ -67,7 +72,8 @@ export interface MatchEvent {
   matchId: string;
   revision: number;
   timestamp: number;
-  delta: Partial<MultiplayerGameState>;
+  actorSeat: number;
+  payload: Partial<MultiplayerGameState>;
 }
 
 export interface MatchSubscriptionResult {

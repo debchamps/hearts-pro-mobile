@@ -93,7 +93,7 @@ export class MultiplayerService {
       this.state = applyDelta(this.state, {
         matchId: evt.matchId,
         revision: evt.revision,
-        changed: evt.delta,
+        changed: evt.payload,
         serverTimeMs: evt.timestamp,
       });
     }

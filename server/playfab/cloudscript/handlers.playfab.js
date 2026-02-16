@@ -91,7 +91,7 @@ var EventDispatcher = {
     }
     return cache.events[matchId];
   },
-  emit: function(match, type, delta) {
+  emit: function(match, type, actorSeat, payload) {
     var stream = EventDispatcher.getStream(match.matchId);
     var event = {
       eventId: stream.nextEventId++,
@@ -99,7 +99,8 @@ var EventDispatcher = {
       matchId: match.matchId,
       revision: match.revision,
       timestamp: Date.now(),
-      delta: delta || {}
+      actorSeat: typeof actorSeat === 'number' ? actorSeat : -1,
+      payload: payload || {}
     };
     stream.events.push(event);
     if (stream.events.length > EVENT_LIMIT_PER_MATCH) {
@@ -920,23 +921,29 @@ function runServerTurnChain(match, beforeRevision) {
         match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
       }
       bump(match);
-      EventDispatcher.emit(match, 'TURN_CHANGED', { phase: match.phase, turnIndex: match.turnIndex, passingSelections: match.passingSelections, turnDeadlineMs: match.turnDeadlineMs });
+      EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { phase: match.phase, turnIndex: match.turnIndex, passingSelections: match.passingSelections, turnDeadlineMs: match.turnDeadlineMs });
       changed = true;
       continue;
     }
 
-    if (match.phase === 'BIDDING') {
-      if (!isSeatBotOrDisconnected(match, match.turnIndex)) break;
-      autoBid(match, match.turnIndex);
-      if (!finalizeBidding(match)) {
-        match.turnIndex = (match.turnIndex + 1) % 4;
-        match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
-      }
-      bump(match);
-      EventDispatcher.emit(match, 'TURN_CHANGED', { phase: match.phase, bids: match.bids, turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs });
-      changed = true;
-      continue;
+  if (match.phase === 'BIDDING') {
+    if (!isSeatBotOrDisconnected(match, match.turnIndex)) break;
+    var biddingWasActive = match.phase === 'BIDDING';
+    autoBid(match, match.turnIndex);
+    var biddingFinished = finalizeBidding(match);
+    if (!biddingFinished) {
+      match.turnIndex = (match.turnIndex + 1) % 4;
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
     }
+    bump(match);
+    EventDispatcher.emit(match, 'BID_SUBMITTED', match.turnIndex, { bids: match.bids, turnIndex: match.turnIndex, phase: match.phase });
+    if (biddingWasActive && biddingFinished) {
+      EventDispatcher.emit(match, 'BIDDING_COMPLETED', match.turnIndex, { bids: match.bids, phase: match.phase, turnIndex: match.turnIndex });
+    }
+    EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { phase: match.phase, bids: match.bids, turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs });
+    changed = true;
+    continue;
+  }
 
     var turnSeat = match.turnIndex;
     if (!isSeatBotOrDisconnected(match, turnSeat)) break;
@@ -944,14 +951,15 @@ function runServerTurnChain(match, beforeRevision) {
     var cardId = chooseBotCard(match, turnSeat);
     applyMove(match, turnSeat, cardId, true);
     bump(match);
-    EventDispatcher.emit(match, 'CARD_PLAYED', {
+    EventDispatcher.emit(match, 'CARD_PLAYED', turnSeat, {
       turnIndex: match.turnIndex,
       currentTrick: match.currentTrick,
       hands: match.hands,
       lastCompletedTrick: match.lastCompletedTrick
     });
+    EventDispatcher.emit(match, 'BOT_ACTION', turnSeat, { turnIndex: match.turnIndex, phase: match.phase });
     if (beforeTrickCount === 3) {
-      EventDispatcher.emit(match, 'TRICK_COMPLETED', {
+      EventDispatcher.emit(match, 'TRICK_COMPLETED', turnSeat, {
         lastCompletedTrick: match.lastCompletedTrick,
         scores: match.scores,
         tricksWon: match.tricksWon,
@@ -959,10 +967,10 @@ function runServerTurnChain(match, beforeRevision) {
       });
     }
     if (match.status === 'COMPLETED') {
-      EventDispatcher.emit(match, 'ROUND_COMPLETED', { scores: match.scores, tricksWon: match.tricksWon });
-      EventDispatcher.emit(match, 'MATCH_COMPLETED', { status: match.status, scores: match.scores, tricksWon: match.tricksWon });
+      EventDispatcher.emit(match, 'ROUND_COMPLETED', turnSeat, { scores: match.scores, tricksWon: match.tricksWon });
+      EventDispatcher.emit(match, 'MATCH_COMPLETED', turnSeat, { status: match.status, scores: match.scores, tricksWon: match.tricksWon });
     } else {
-      EventDispatcher.emit(match, 'TURN_CHANGED', { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
+      EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
     }
     changed = true;
   }
@@ -1103,9 +1111,10 @@ handlers.findMatch = function(args, context) {
     var started = startMatchIfReady(existing);
     bump(existing);
     if (started) {
-      EventDispatcher.emit(existing, 'MATCH_STARTED', { status: existing.status, phase: existing.phase, turnIndex: existing.turnIndex });
+      EventDispatcher.emit(existing, 'MATCH_STARTED', -1, { status: existing.status, phase: existing.phase, turnIndex: existing.turnIndex });
+      EventDispatcher.emit(existing, 'CARDS_DISTRIBUTED', -1, { seed: existing.seed, deck: existing.deck, hands: existing.hands });
     }
-    EventDispatcher.emit(existing, 'TURN_CHANGED', { turnIndex: existing.turnIndex, phase: existing.phase, turnDeadlineMs: existing.turnDeadlineMs });
+    EventDispatcher.emit(existing, 'TURN_CHANGED', existing.turnIndex, { turnIndex: existing.turnIndex, phase: existing.phase, turnDeadlineMs: existing.turnDeadlineMs });
     runServerTurnChain(existing, existing.revision);
     saveMatch(existing, context);
     titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
@@ -1115,6 +1124,7 @@ handlers.findMatch = function(args, context) {
   var match = newMatch(gameType, args.playerName, playerId);
   ensureTracking(match);
   match.autoMoveOnTimeoutBySeat[0] = args.autoMoveOnTimeout !== false;
+  EventDispatcher.emit(match, 'MATCH_CREATED', -1, { status: match.status, phase: match.phase });
   saveMatch(match, context);
   titleDataSet(waitKey, {
     matchId: match.matchId,
@@ -1130,6 +1140,7 @@ handlers.createMatch = function(args, context) {
   var match = newMatch(args.gameType, args.playerName, playerId);
   ensureTracking(match);
   match.autoMoveOnTimeoutBySeat[0] = args.autoMoveOnTimeout !== false;
+  EventDispatcher.emit(match, 'MATCH_CREATED', -1, { status: match.status, phase: match.phase });
 
   setCoins(playerId, getCoins(playerId) - ENTRY_FEE);
   getStats(playerId)[STAT_KEYS.COINS] = getCoins(playerId);
@@ -1145,7 +1156,7 @@ handlers.joinMatch = function(args, context) {
   var seat = 2;
   match.players[seat].name = args.playerName || match.players[seat].name;
   bump(match);
-  EventDispatcher.emit(match, 'PLAYER_RECONNECTED', { players: match.players });
+  EventDispatcher.emit(match, 'PLAYER_RECONNECTED', seat, { players: match.players });
   saveMatch(match, context);
   return { seat: seat, delta: deltaFor(match, buildChangedState(before, match)) };
 };
@@ -1159,28 +1170,28 @@ handlers.submitMove = function(args, context) {
   if (match.phase !== 'PLAYING') {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
-  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
+  if (args.expectedRevision !== match.revision) return deltaFor(match, match);
   var beforeTrickCount = match.currentTrick.length;
   applyMove(match, args.seat, args.cardId, false);
   bump(match);
-  EventDispatcher.emit(match, 'CARD_PLAYED', {
+  EventDispatcher.emit(match, 'CARD_PLAYED', args.seat, {
     hands: match.hands,
     currentTrick: match.currentTrick,
     turnIndex: match.turnIndex,
     lastCompletedTrick: match.lastCompletedTrick
   });
   if (beforeTrickCount === 3) {
-    EventDispatcher.emit(match, 'TRICK_COMPLETED', {
+    EventDispatcher.emit(match, 'TRICK_COMPLETED', args.seat, {
       lastCompletedTrick: match.lastCompletedTrick,
       scores: match.scores,
       tricksWon: match.tricksWon
     });
   }
   if (match.status === 'COMPLETED') {
-    EventDispatcher.emit(match, 'ROUND_COMPLETED', { scores: match.scores, tricksWon: match.tricksWon });
-    EventDispatcher.emit(match, 'MATCH_COMPLETED', { status: match.status, scores: match.scores });
+    EventDispatcher.emit(match, 'ROUND_COMPLETED', args.seat, { scores: match.scores, tricksWon: match.tricksWon });
+    EventDispatcher.emit(match, 'MATCH_COMPLETED', args.seat, { status: match.status, scores: match.scores });
   } else {
-    EventDispatcher.emit(match, 'TURN_CHANGED', { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
+    EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
   }
   runServerTurnChain(match, match.revision);
   saveMatch(match, context);
@@ -1191,7 +1202,7 @@ handlers.submitPass = function(args, context) {
   var match = getMatch(args.matchId, context);
   var before = cloneState(match);
   if (match.phase !== 'PASSING') throw new Error('Not in passing phase');
-  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
+  if (args.expectedRevision !== match.revision) return deltaFor(match, match);
   if (args.seat !== match.turnIndex) throw new Error('Not your turn');
   if (isSeatBotOrDisconnected(match, args.seat)) throw new Error('Bot seat cannot submit pass');
   if (!args.cardIds || args.cardIds.length !== 3) throw new Error('Select exactly 3 cards');
@@ -1219,7 +1230,7 @@ handlers.submitPass = function(args, context) {
   }
 
   bump(match);
-  EventDispatcher.emit(match, 'TURN_CHANGED', {
+  EventDispatcher.emit(match, 'TURN_CHANGED', args.seat, {
     phase: match.phase,
     passingSelections: match.passingSelections,
     turnIndex: match.turnIndex,
@@ -1234,7 +1245,7 @@ handlers.submitBid = function(args, context) {
   var match = getMatch(args.matchId, context);
   var before = cloneState(match);
   if (match.phase !== 'BIDDING') throw new Error('Not in bidding phase');
-  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
+  if (args.expectedRevision !== match.revision) return deltaFor(match, match);
   if (args.seat !== match.turnIndex) throw new Error('Not your turn');
   if (isSeatBotOrDisconnected(match, args.seat)) throw new Error('Bot seat cannot submit bid');
   if (typeof args.bid !== 'number') throw new Error('Bid must be a number');
@@ -1251,7 +1262,11 @@ handlers.submitBid = function(args, context) {
   }
 
   bump(match);
-  EventDispatcher.emit(match, 'TURN_CHANGED', {
+  EventDispatcher.emit(match, 'BID_SUBMITTED', args.seat, { bids: match.bids, turnIndex: match.turnIndex, phase: match.phase });
+  if (match.phase === 'PLAYING') {
+    EventDispatcher.emit(match, 'BIDDING_COMPLETED', args.seat, { bids: match.bids, phase: match.phase, turnIndex: match.turnIndex });
+  }
+  EventDispatcher.emit(match, 'TURN_CHANGED', args.seat, {
     phase: match.phase,
     bids: match.bids,
     turnIndex: match.turnIndex,
@@ -1308,31 +1323,31 @@ handlers.timeoutMove = function(args, context) {
     match.players[turnSeat].disconnected = true;
     match.players[turnSeat].disconnectedAt = Date.now();
     bump(match);
-    EventDispatcher.emit(match, 'PLAYER_DISCONNECTED', { players: match.players, turnIndex: match.turnIndex });
+    EventDispatcher.emit(match, 'PLAYER_DISCONNECTED', turnSeat, { players: match.players, turnIndex: match.turnIndex });
     runServerTurnChain(match, match.revision);
   } else {
     var beforeTrickCount = match.currentTrick.length;
     var timeoutCard = chooseBotCard(match, turnSeat);
     applyMove(match, turnSeat, timeoutCard, true);
     bump(match);
-    EventDispatcher.emit(match, 'CARD_PLAYED', {
+    EventDispatcher.emit(match, 'CARD_PLAYED', turnSeat, {
       hands: match.hands,
       currentTrick: match.currentTrick,
       turnIndex: match.turnIndex,
       lastCompletedTrick: match.lastCompletedTrick
     });
     if (beforeTrickCount === 3) {
-      EventDispatcher.emit(match, 'TRICK_COMPLETED', {
+      EventDispatcher.emit(match, 'TRICK_COMPLETED', turnSeat, {
         lastCompletedTrick: match.lastCompletedTrick,
         scores: match.scores,
         tricksWon: match.tricksWon
       });
     }
     if (match.status === 'COMPLETED') {
-      EventDispatcher.emit(match, 'ROUND_COMPLETED', { scores: match.scores, tricksWon: match.tricksWon });
-      EventDispatcher.emit(match, 'MATCH_COMPLETED', { status: match.status, scores: match.scores });
+      EventDispatcher.emit(match, 'ROUND_COMPLETED', turnSeat, { scores: match.scores, tricksWon: match.tricksWon });
+      EventDispatcher.emit(match, 'MATCH_COMPLETED', turnSeat, { status: match.status, scores: match.scores });
     } else {
-      EventDispatcher.emit(match, 'TURN_CHANGED', { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
+      EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
     }
     runServerTurnChain(match, match.revision);
   }
@@ -1347,7 +1362,7 @@ handlers.markDisconnected = function(args, context) {
   match.players[seat].disconnected = true;
   match.players[seat].disconnectedAt = Date.now();
   bump(match);
-  EventDispatcher.emit(match, 'PLAYER_DISCONNECTED', { players: match.players, turnIndex: match.turnIndex });
+  EventDispatcher.emit(match, 'PLAYER_DISCONNECTED', seat, { players: match.players, turnIndex: match.turnIndex });
   runServerTurnChain(match, match.revision);
   saveMatch(match, context);
   return { ok: true, reconnectWindowMs: RECONNECT_WINDOW_MS, delta: deltaFor(match, buildChangedState(before, match)) };
@@ -1373,7 +1388,7 @@ handlers.reconnect = function(args, context) {
   match.players[seat].disconnected = false;
   delete match.players[seat].disconnectedAt;
   bump(match);
-  EventDispatcher.emit(match, 'PLAYER_RECONNECTED', { players: match.players, turnIndex: match.turnIndex });
+  EventDispatcher.emit(match, 'PLAYER_RECONNECTED', seat, { players: match.players, turnIndex: match.turnIndex });
   saveMatch(match, context);
   return { seat: seat, delta: deltaFor(match, buildChangedState(before, match)) };
 };
@@ -1390,7 +1405,7 @@ handlers.endMatch = function(args, context) {
   var before = cloneState(match);
   match.status = 'COMPLETED';
   bump(match);
-  EventDispatcher.emit(match, 'MATCH_COMPLETED', { status: match.status, scores: match.scores, tricksWon: match.tricksWon });
+  EventDispatcher.emit(match, 'MATCH_COMPLETED', -1, { status: match.status, scores: match.scores, tricksWon: match.tricksWon });
 
   var standings = [0, 1, 2, 3]
     .map(function(seat) { return { seat: seat, score: match.scores[seat] || 0 }; })
