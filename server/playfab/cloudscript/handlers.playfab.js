@@ -1030,22 +1030,31 @@ function saveMatch(match, context) {
 }
 
 function getMatch(matchId, context) {
-  if (cache.matches[matchId]) return cache.matches[matchId];
+  var cached = cache.matches[matchId] || null;
   var pid = getCurrentPlayerId(context);
+  var newest = cached;
+
+  function pickNewest(candidate) {
+    if (!candidate) return;
+    if (!newest || (candidate.revision || 0) > (newest.revision || 0)) {
+      newest = candidate;
+    }
+  }
+
   try {
     var ud = server.GetUserReadOnlyData({ PlayFabId: pid, Keys: ['match_' + matchId] });
     var raw = ud && ud.Data && ud.Data['match_' + matchId] && ud.Data['match_' + matchId].Value;
     if (raw) {
-      var parsed = JSON.parse(raw);
-      cache.matches[matchId] = parsed;
-      return parsed;
+      pickNewest(JSON.parse(raw));
     }
   } catch (e) {}
 
   var loaded = titleDataGet('match_' + matchId);
-  if (loaded) {
-    cache.matches[matchId] = loaded;
-    return loaded;
+  pickNewest(loaded);
+
+  if (newest) {
+    cache.matches[matchId] = newest;
+    return newest;
   }
   throw new Error('Match not found');
 }
