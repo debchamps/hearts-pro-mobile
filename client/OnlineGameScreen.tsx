@@ -122,7 +122,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const selfSeat = serviceRef.current.getSeat();
   const toViewSeat = (seat: number) => (seat - selfSeat + 4) % 4;
   const toGlobalSeat = (viewSeat: number) => (viewSeat + selfSeat) % 4;
-  const phase = ((state as any)?.phase || (state?.status === 'WAITING' ? 'WAITING' : 'PLAYING')) as 'WAITING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'COMPLETED';
+  const phase = (((state as any)?.phase || (state?.status === 'WAITING' ? 'WAITING' : 'WAITING'))) as 'WAITING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'COMPLETED';
   const [selectedPassIds, setSelectedPassIds] = useState<string[]>([]);
   const hand = useMemo(() => {
     if (!state) return [];
@@ -223,11 +223,18 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     } catch (e) {
       const msg = (e as Error).message || '';
       // Non-fatal race cases: resync and continue.
-      if (msg.includes('Revision mismatch') || msg.includes('Not your turn')) {
+      if (
+        msg.includes('Revision mismatch') ||
+        msg.includes('Not your turn') ||
+        msg.includes('Round setup in progress') ||
+        msg.includes('Waiting for second player') ||
+        msg.includes('Not in bidding phase') ||
+        msg.includes('Not in passing phase')
+      ) {
         try {
           const next = await serviceRef.current.pollDelta();
           if (next) setState({ ...next });
-          showMessage('State synced, try again', 1200);
+          showMessage('State synced', 1200);
           return;
         } catch {}
       }
@@ -386,7 +393,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
                 if (phase === 'PASSING') togglePassCard(item.card.id);
                 else submit(item.card.id);
               }}
-              disabled={state.status !== 'PLAYING'}
+              disabled={state.status !== 'PLAYING' || phase !== 'PLAYING'}
               className={`absolute card-fan-item animate-deal ${state.turnIndex === selfSeat ? 'cursor-pointer active:-translate-y-2' : 'opacity-70 cursor-default'}`}
               style={{
                 transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.32 + (phase === 'PASSING' && selectedPassIds.includes(item.card.id) ? -80 : 0)}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg)`,
