@@ -188,7 +188,7 @@ var EventDispatcher = {
       revision: match.revision,
       timestamp: Date.now(),
       actorSeat: typeof actorSeat === 'number' ? actorSeat : -1,
-      payload: cloneState(payload || match)
+      payload: cloneState(payload || {})
     };
     stream.events.push(event);
     if (stream.events.length > EVENT_LIMIT_PER_MATCH) {

@@ -51,7 +51,7 @@ function emitEvent(match, type, actorSeat = -1, payload = {}) {
     revision: match.revision,
     timestamp: Date.now(),
     actorSeat,
-    payload: cloneState(payload || match),
+    payload: cloneState(payload || {}),
   };
   stream.events.push(evt);
   if (stream.events.length > 200) stream.events.splice(0, stream.events.length - 200);
