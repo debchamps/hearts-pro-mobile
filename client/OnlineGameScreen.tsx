@@ -498,7 +498,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       {result && <div className="mt-2 text-center text-sm font-black text-green-400">{result}</div>}
 
       {showDebugOverlay && (
-        <div className="absolute left-2 bottom-2 z-[300] bg-black/85 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-w-[95vw]">
+        <div className="absolute left-2 top-[calc(var(--safe-top)+3.25rem)] z-[300] bg-black/85 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-w-[95vw] max-h-[45vh] overflow-auto">
           <div>match: {String(syncDebug.matchId || 'NA')}</div>
           <div>seat: {syncDebug.seat} rev: {syncDebug.revision} evt: {syncDebug.lastEventId}</div>
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
