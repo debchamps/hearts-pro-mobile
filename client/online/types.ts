@@ -51,6 +51,31 @@ export interface GameStateDelta {
   serverTimeMs: number;
 }
 
+export type MatchEventType =
+  | 'MATCH_STARTED'
+  | 'TURN_CHANGED'
+  | 'CARD_PLAYED'
+  | 'TRICK_COMPLETED'
+  | 'ROUND_COMPLETED'
+  | 'MATCH_COMPLETED'
+  | 'PLAYER_DISCONNECTED'
+  | 'PLAYER_RECONNECTED';
+
+export interface MatchEvent {
+  eventId: number;
+  type: MatchEventType;
+  matchId: string;
+  revision: number;
+  timestamp: number;
+  delta: Partial<MultiplayerGameState>;
+}
+
+export interface MatchSubscriptionResult {
+  subscriptionId: string;
+  events: MatchEvent[];
+  latestEventId: number;
+}
+
 export interface MatchConfig {
   gameType: GameType;
   seed?: number;
@@ -89,7 +114,9 @@ export interface OnlineApi {
   submitMove(input: MoveSubmission): Promise<GameStateDelta>;
   submitPass?(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }): Promise<GameStateDelta>;
   submitBid?(input: { matchId: string; seat: number; bid: number; expectedRevision: number }): Promise<GameStateDelta>;
-  getState(input: { matchId: string; sinceRevision: number; seat?: number }): Promise<GameStateDelta>;
+  getSnapshot(input: { matchId: string; seat?: number }): Promise<GameStateDelta>;
+  subscribeToMatch(input: { matchId: string; sinceEventId?: number; seat?: number }): Promise<MatchSubscriptionResult>;
+  unsubscribeFromMatch(input: { matchId: string; subscriptionId: string }): Promise<{ ok: boolean }>;
   timeoutMove(input: { matchId: string }): Promise<GameStateDelta>;
   endMatch(input: { matchId: string }): Promise<MatchResult>;
   updateCoins(input: { playFabId: string; delta: number }): Promise<{ coins: number }>;

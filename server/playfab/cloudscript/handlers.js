@@ -27,7 +27,30 @@ const stateStore = {
   coins: new Map(),
   stats: new Map(),
   leaderboard: new Map(),
+  events: new Map(),
+  subscriptions: new Map(),
 };
+
+function ensureEventStream(matchId) {
+  if (!stateStore.events.has(matchId)) {
+    stateStore.events.set(matchId, { nextEventId: 1, events: [] });
+  }
+  return stateStore.events.get(matchId);
+}
+
+function emitEvent(match, type, delta = {}) {
+  const stream = ensureEventStream(match.matchId);
+  const evt = {
+    eventId: stream.nextEventId++,
+    type,
+    matchId: match.matchId,
+    revision: match.revision,
+    timestamp: Date.now(),
+    delta,
+  };
+  stream.events.push(evt);
+  if (stream.events.length > 200) stream.events.splice(0, stream.events.length - 200);
+}
 
 function randomId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -148,6 +171,7 @@ export function createMatch(args, context = {}) {
   setCoins(playerId, getCoins(playerId) - ENTRY_FEE);
   setStat(playerId, STAT_KEYS.COINS, getCoins(playerId));
   stateStore.matches.set(match.matchId, match);
+  emitEvent(match, 'MATCH_STARTED', match);
   persistMatchSnapshot(match);
   return { matchId: match.matchId, seat: 0 };
 }
@@ -223,21 +247,40 @@ export function submitMove(args) {
   match.turnIndex = (match.turnIndex + 1) % 4;
   match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
   bump(match);
+  emitEvent(match, 'CARD_PLAYED', match);
   persistMatchSnapshot(match);
   return deltaFor(match);
 }
 
-export function getState(args) {
+export function getSnapshot(args) {
   const match = assertMatch(args.matchId);
-  if (args.sinceRevision >= match.revision) {
-    return {
-      matchId: match.matchId,
-      revision: match.revision,
-      changed: {},
-      serverTimeMs: Date.now(),
-    };
-  }
   return deltaFor(match);
+}
+
+export function getState(args) {
+  return getSnapshot(args);
+}
+
+export function subscribeToMatch(args, context = {}) {
+  const match = assertMatch(args.matchId);
+  const stream = ensureEventStream(match.matchId);
+  if (!stateStore.subscriptions.has(match.matchId)) stateStore.subscriptions.set(match.matchId, {});
+  const subscriptionId = randomId('sub');
+  const bucket = stateStore.subscriptions.get(match.matchId);
+  bucket[subscriptionId] = { playerId: context?.currentPlayerId || 'LOCAL_PLAYER', createdAt: Date.now() };
+  const sinceEventId = Number(args.sinceEventId || 0);
+  return {
+    subscriptionId,
+    events: stream.events.filter((evt) => evt.eventId > sinceEventId),
+    latestEventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
+  };
+}
+
+export function unsubscribeFromMatch(args) {
+  const bucket = stateStore.subscriptions.get(args.matchId) || {};
+  delete bucket[args.subscriptionId];
+  stateStore.subscriptions.set(args.matchId, bucket);
+  return { ok: true };
 }
 
 export function timeoutMove(args) {
@@ -255,6 +298,7 @@ export function timeoutMove(args) {
   match.turnIndex = (match.turnIndex + 1) % 4;
   match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
   bump(match);
+  emitEvent(match, 'TURN_CHANGED', match);
   persistMatchSnapshot(match);
   return deltaFor(match);
 }
@@ -298,6 +342,7 @@ export function reconnect(args) {
   match.players[seat].disconnected = false;
   delete match.players[seat].disconnectedAt;
   bump(match);
+  emitEvent(match, 'PLAYER_RECONNECTED', match);
   persistMatchSnapshot(match);
   return { seat, delta: deltaFor(match) };
 }
@@ -328,7 +373,10 @@ if (typeof globalThis !== 'undefined') {
     createMatch,
     joinMatch,
     submitMove,
+    getSnapshot,
     getState,
+    subscribeToMatch,
+    unsubscribeFromMatch,
     timeoutMove,
     endMatch,
     updateCoins,

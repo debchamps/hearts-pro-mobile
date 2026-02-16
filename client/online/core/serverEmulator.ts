@@ -1,13 +1,16 @@
 import { GameType } from '../../../types';
 import { getBotMove } from './botEngine';
 import { createDelta, createInitialState, resolveRewards, submitMove, timeoutMove } from './matchEngine';
-import { GameStateDelta, MatchResult, MultiplayerGameState, OnlineApi } from '../types';
+import { GameStateDelta, MatchEvent, MatchResult, MatchSubscriptionResult, MultiplayerGameState, OnlineApi } from '../types';
 
 const TIMEOUT_MS = 5000;
 
 interface MatchStore {
   state: MultiplayerGameState;
   previous: MultiplayerGameState | null;
+  events: MatchEvent[];
+  nextEventId: number;
+  subscriptions: Record<string, string>;
 }
 
 const matches = new Map<string, MatchStore>();
@@ -17,31 +20,52 @@ function createMatchId() {
   return `m_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function runBotIfNeeded(matchId: string) {
-  const store = matches.get(matchId);
-  if (!store) return;
-  const state = store.state;
-  if (state.status !== 'PLAYING') return;
+function createSubscriptionId() {
+  return `sub_${Math.random().toString(36).slice(2, 10)}`;
+}
 
-  const active = state.players[state.turnIndex];
-  if (!active || !active.isBot) return;
-
-  const { cardId, simulatedDelayMs } = await getBotMove(state, active.seat);
-  await new Promise((r) => setTimeout(r, simulatedDelayMs));
-
-  const latestStore = matches.get(matchId);
-  if (!latestStore || latestStore.state.status !== 'PLAYING') return;
-  if (latestStore.state.turnIndex !== active.seat) return;
-
-  latestStore.previous = latestStore.state;
-  latestStore.state = submitMove(latestStore.state, active.seat, cardId, TIMEOUT_MS);
-  void runBotIfNeeded(matchId);
+function emitEvent(store: MatchStore, type: MatchEvent['type']) {
+  const event: MatchEvent = {
+    eventId: store.nextEventId++,
+    type,
+    matchId: store.state.matchId,
+    revision: store.state.revision,
+    timestamp: Date.now(),
+    delta: store.state,
+  };
+  store.events.push(event);
+  if (store.events.length > 200) {
+    store.events.splice(0, store.events.length - 200);
+  }
 }
 
 function currentDelta(matchId: string): GameStateDelta {
   const store = matches.get(matchId);
   if (!store) throw new Error('Match not found');
   return createDelta(store.previous, store.state);
+}
+
+async function runBotTurnChain(matchId: string) {
+  for (;;) {
+    const store = matches.get(matchId);
+    if (!store || store.state.status !== 'PLAYING') return;
+    const active = store.state.players[store.state.turnIndex];
+    if (!active || !active.isBot) return;
+
+    const { cardId } = await getBotMove(store.state, active.seat);
+    const latest = matches.get(matchId);
+    if (!latest || latest.state.status !== 'PLAYING') return;
+    if (latest.state.turnIndex !== active.seat) return;
+
+    latest.previous = latest.state;
+    latest.state = submitMove(latest.state, active.seat, cardId, TIMEOUT_MS);
+    emitEvent(latest, latest.state.currentTrick.length === 0 ? 'TRICK_COMPLETED' : 'CARD_PLAYED');
+    if (latest.state.status === 'COMPLETED') {
+      emitEvent(latest, 'MATCH_COMPLETED');
+      return;
+    }
+    emitEvent(latest, 'TURN_CHANGED');
+  }
 }
 
 export const localOnlineApi: OnlineApi = {
@@ -65,12 +89,20 @@ export const localOnlineApi: OnlineApi = {
       entryFee: 50,
       timeoutMs: TIMEOUT_MS,
     });
-
     state.players[0].name = input.playerName || 'YOU';
     state.players[0].coins = wallet.get('LOCAL_PLAYER') ?? 1000;
 
-    matches.set(matchId, { state, previous: null });
-    void runBotIfNeeded(matchId);
+    const store: MatchStore = {
+      state,
+      previous: null,
+      events: [],
+      nextEventId: 1,
+      subscriptions: {},
+    };
+    matches.set(matchId, store);
+    emitEvent(store, 'MATCH_STARTED');
+    emitEvent(store, 'TURN_CHANGED');
+    void runBotTurnChain(matchId);
     return { matchId, seat: 0 };
   },
 
@@ -85,31 +117,43 @@ export const localOnlineApi: OnlineApi = {
 
     store.previous = store.state;
     store.state = submitMove(store.state, input.seat, input.cardId, TIMEOUT_MS);
-    void runBotIfNeeded(input.matchId);
+    emitEvent(store, store.state.currentTrick.length === 0 ? 'TRICK_COMPLETED' : 'CARD_PLAYED');
+    if (store.state.status === 'COMPLETED') emitEvent(store, 'MATCH_COMPLETED');
+    else emitEvent(store, 'TURN_CHANGED');
+    await runBotTurnChain(input.matchId);
     return currentDelta(input.matchId);
   },
 
-  async getState(input) {
+  async getSnapshot(input) {
     const store = matches.get(input.matchId);
     if (!store) throw new Error('Match not found');
+    return {
+      matchId: input.matchId,
+      revision: store.state.revision,
+      changed: store.state,
+      serverTimeMs: Date.now(),
+    };
+  },
 
-    const timed = timeoutMove(store.state, TIMEOUT_MS);
-    if (timed !== store.state) {
-      store.previous = store.state;
-      store.state = timed;
-      void runBotIfNeeded(input.matchId);
-    }
+  async subscribeToMatch(input): Promise<MatchSubscriptionResult> {
+    const store = matches.get(input.matchId);
+    if (!store) throw new Error('Match not found');
+    const subscriptionId = createSubscriptionId();
+    store.subscriptions[subscriptionId] = String(input.seat ?? 0);
+    const sinceEventId = input.sinceEventId || 0;
+    const events = store.events.filter((event) => event.eventId > sinceEventId);
+    return {
+      subscriptionId,
+      events,
+      latestEventId: store.events.length ? store.events[store.events.length - 1].eventId : 0,
+    };
+  },
 
-    if (store.state.revision <= input.sinceRevision) {
-      return {
-        matchId: input.matchId,
-        revision: store.state.revision,
-        changed: {},
-        serverTimeMs: Date.now(),
-      };
-    }
-
-    return currentDelta(input.matchId);
+  async unsubscribeFromMatch(input) {
+    const store = matches.get(input.matchId);
+    if (!store) return { ok: true };
+    delete store.subscriptions[input.subscriptionId];
+    return { ok: true };
   },
 
   async timeoutMove(input) {
@@ -117,7 +161,12 @@ export const localOnlineApi: OnlineApi = {
     if (!store) throw new Error('Match not found');
     store.previous = store.state;
     store.state = timeoutMove(store.state, TIMEOUT_MS);
-    void runBotIfNeeded(input.matchId);
+    if (store.state.revision !== store.previous.revision) {
+      emitEvent(store, store.state.currentTrick.length === 0 ? 'TRICK_COMPLETED' : 'CARD_PLAYED');
+      if (store.state.status === 'COMPLETED') emitEvent(store, 'MATCH_COMPLETED');
+      else emitEvent(store, 'TURN_CHANGED');
+    }
+    await runBotTurnChain(input.matchId);
     return currentDelta(input.matchId);
   },
 
@@ -125,14 +174,13 @@ export const localOnlineApi: OnlineApi = {
     const store = matches.get(input.matchId);
     if (!store) throw new Error('Match not found');
     store.state.status = 'COMPLETED';
+    emitEvent(store, 'MATCH_COMPLETED');
     const result = resolveRewards(store.state);
-
     result.rewards.forEach((reward) => {
       const player = store.state.players[reward.seat];
       const current = wallet.get(player.playFabId) ?? 1000;
       wallet.set(player.playFabId, current + reward.coinsDelta);
     });
-
     return result;
   },
 
@@ -146,10 +194,9 @@ export const localOnlineApi: OnlineApi = {
   async reconnect(input) {
     const store = matches.get(input.matchId);
     if (!store) throw new Error('Match not found');
-
     const seat = store.state.players.find((p) => p.playFabId === input.playFabId || p.seat === 0)?.seat ?? 0;
     store.state.players = store.state.players.map((p) => (p.seat === seat ? { ...p, disconnected: false } : p));
-
+    emitEvent(store, 'PLAYER_RECONNECTED');
     return {
       seat,
       delta: {
@@ -166,5 +213,6 @@ export function markDisconnected(matchId: string, seat: number) {
   const store = matches.get(matchId);
   if (!store) return;
   store.state.players = store.state.players.map((p) => (p.seat === seat ? { ...p, disconnected: true, isBot: true } : p));
-  void runBotIfNeeded(matchId);
+  emitEvent(store, 'PLAYER_DISCONNECTED');
+  void runBotTurnChain(matchId);
 }

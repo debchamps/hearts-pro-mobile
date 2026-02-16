@@ -1,13 +1,16 @@
 import { GameType } from '../../../types';
 import { applyDelta } from '../core/matchEngine';
 import { createOnlineApiAsync } from './playfabApi';
-import { MultiplayerGameState, OnlineApi } from '../types';
+import { MatchEvent, MultiplayerGameState, OnlineApi } from '../types';
 
 export class MultiplayerService {
   private api: OnlineApi | null = null;
   private state: MultiplayerGameState | null = null;
   private matchId: string | null = null;
   private seat = 0;
+  private subscriptionId: string | null = null;
+  private lastEventId = 0;
+  private listeners = new Set<(state: MultiplayerGameState, events: MatchEvent[]) => void>();
 
   private async ensureApi() {
     if (!this.api) {
@@ -24,7 +27,7 @@ export class MultiplayerService {
 
     this.matchId = created.matchId;
     this.seat = created.seat;
-    const delta = await api.getState({ matchId: created.matchId, sinceRevision: 0, seat: created.seat });
+    const delta = await api.getSnapshot({ matchId: created.matchId, seat: created.seat });
     this.state = applyDelta(null, delta);
     return this.state;
   }
@@ -35,6 +38,58 @@ export class MultiplayerService {
 
   getState() {
     return this.state;
+  }
+
+  private notify(events: MatchEvent[] = []) {
+    if (!this.state) return;
+    this.listeners.forEach((listener) => listener(this.state!, events));
+  }
+
+  private async resyncSnapshot() {
+    if (!this.matchId) throw new Error('No active match');
+    const api = await this.ensureApi();
+    const snapshot = await api.getSnapshot({ matchId: this.matchId, seat: this.seat });
+    this.state = applyDelta(this.state, snapshot);
+    return this.state!;
+  }
+
+  async syncSnapshot() {
+    const next = await this.resyncSnapshot();
+    this.notify([]);
+    return next;
+  }
+
+  async subscribeToMatch(listener: (state: MultiplayerGameState, events: MatchEvent[]) => void) {
+    if (!this.matchId) throw new Error('No active match');
+    const api = await this.ensureApi();
+    this.listeners.add(listener);
+    const res = await api.subscribeToMatch({
+      matchId: this.matchId,
+      sinceEventId: this.lastEventId,
+      seat: this.seat,
+    });
+    this.subscriptionId = res.subscriptionId;
+    this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
+    if (res.events.length > 0) {
+      const latest = res.events[res.events.length - 1];
+      this.state = applyDelta(this.state, {
+        matchId: latest.matchId,
+        revision: latest.revision,
+        changed: latest.delta,
+        serverTimeMs: latest.timestamp,
+      });
+      this.notify(res.events);
+    } else if (this.state) {
+      listener(this.state, []);
+    }
+  }
+
+  async unsubscribeFromMatch(listener?: (state: MultiplayerGameState, events: MatchEvent[]) => void) {
+    if (listener) this.listeners.delete(listener);
+    if (!this.matchId || !this.subscriptionId || this.listeners.size > 0) return;
+    const api = await this.ensureApi();
+    await api.unsubscribeFromMatch({ matchId: this.matchId, subscriptionId: this.subscriptionId });
+    this.subscriptionId = null;
   }
 
   async submitMove(cardId: string): Promise<MultiplayerGameState> {
@@ -49,6 +104,7 @@ export class MultiplayerService {
         expectedRevision: this.state!.revision,
       });
       this.state = applyDelta(this.state, delta);
+      this.notify([]);
       return this.state!;
     };
 
@@ -59,12 +115,7 @@ export class MultiplayerService {
       if (!msg.includes('Revision mismatch')) throw e;
 
       // Resync full state then retry once.
-      const refresh = await api.getState({
-        matchId: this.matchId,
-        sinceRevision: 0,
-        seat: this.seat,
-      });
-      this.state = applyDelta(this.state, refresh);
+      await this.resyncSnapshot();
       return trySubmit();
     }
   }
@@ -82,6 +133,7 @@ export class MultiplayerService {
         expectedRevision: this.state!.revision,
       });
       this.state = applyDelta(this.state, delta);
+      this.notify([]);
       return this.state!;
     };
 
@@ -90,8 +142,7 @@ export class MultiplayerService {
     } catch (e) {
       const msg = (e as Error).message || '';
       if (!msg.includes('Revision mismatch')) throw e;
-      const refresh = await api.getState({ matchId: this.matchId, sinceRevision: 0, seat: this.seat });
-      this.state = applyDelta(this.state, refresh);
+      await this.resyncSnapshot();
       return trySubmit();
     }
   }
@@ -109,6 +160,7 @@ export class MultiplayerService {
         expectedRevision: this.state!.revision,
       });
       this.state = applyDelta(this.state, delta);
+      this.notify([]);
       return this.state!;
     };
 
@@ -117,24 +169,9 @@ export class MultiplayerService {
     } catch (e) {
       const msg = (e as Error).message || '';
       if (!msg.includes('Revision mismatch')) throw e;
-      const refresh = await api.getState({ matchId: this.matchId, sinceRevision: 0, seat: this.seat });
-      this.state = applyDelta(this.state, refresh);
+      await this.resyncSnapshot();
       return trySubmit();
     }
-  }
-
-  async pollDelta(): Promise<MultiplayerGameState | null> {
-    if (!this.state || !this.matchId) return null;
-    const api = await this.ensureApi();
-    const delta = await api.getState({
-      matchId: this.matchId,
-      sinceRevision: this.state.revision,
-      seat: this.seat,
-    });
-
-    if (Object.keys(delta.changed).length === 0) return this.state;
-    this.state = applyDelta(this.state, delta);
-    return this.state;
   }
 
   async forceTimeout() {
@@ -142,6 +179,7 @@ export class MultiplayerService {
     const api = await this.ensureApi();
     const delta = await api.timeoutMove({ matchId: this.matchId });
     this.state = applyDelta(this.state, delta);
+    this.notify([]);
     return this.state;
   }
 

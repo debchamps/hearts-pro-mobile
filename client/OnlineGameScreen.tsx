@@ -12,7 +12,7 @@ import { sortCardsBySuitThenRankAsc } from '../services/cardSort';
 
 export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onExit: () => void }) {
   const serviceRef = useRef<MultiplayerService>(new MultiplayerService());
-  const pollInFlightRef = useRef(false);
+  const subscriptionListenerRef = useRef<((next: MultiplayerGameState) => void) | null>(null);
   const [state, setState] = useState<MultiplayerGameState | null>(null);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -32,7 +32,17 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         const created = await serviceRef.current.createMatch(gameType, getLocalPlayerName(), {
           autoMoveOnTimeout: gameType === 'CALLBREAK' ? getCallbreakAutoMoveOnTimeout() : true,
         });
-        if (mounted) setState(created);
+        if (!mounted) return;
+        setState(created);
+        const boundListener = (next: MultiplayerGameState) => {
+          setState((prev) => {
+            if (!prev) return { ...next };
+            if ((next.revision || 0) < (prev.revision || 0)) return prev;
+            return { ...next };
+          });
+        };
+        subscriptionListenerRef.current = boundListener;
+        await serviceRef.current.subscribeToMatch(boundListener);
       } catch (e) {
         if (mounted) setError((e as Error).message);
       } finally {
@@ -43,32 +53,30 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     init();
     return () => {
       mounted = false;
+      if (subscriptionListenerRef.current) {
+        void serviceRef.current.unsubscribeFromMatch(subscriptionListenerRef.current);
+        subscriptionListenerRef.current = null;
+      } else {
+        void serviceRef.current.unsubscribeFromMatch();
+      }
     };
   }, [gameType]);
 
   useEffect(() => {
-    if (!state || state.status === 'COMPLETED') return;
-    const timer = setInterval(async () => {
-      if (pollInFlightRef.current) return;
-      pollInFlightRef.current = true;
+    if (!state || state.status !== 'PLAYING') return;
+    const turnPlayer = state.players?.[state.turnIndex ?? 0];
+    if (!turnPlayer) return;
+    const delay = Math.max(0, (state.turnDeadlineMs || 0) - Date.now()) + 30;
+    const timeout = window.setTimeout(async () => {
       try {
-        const next = await serviceRef.current.pollDelta();
-        if (next) {
-          setState((prev) => {
-            if (!prev) return { ...next };
-            if ((next.revision || 0) < (prev.revision || 0)) return prev;
-            return { ...next };
-          });
-        }
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        pollInFlightRef.current = false;
+        const next = await serviceRef.current.forceTimeout();
+        if (next) setState({ ...next });
+      } catch {
+        // Timeout races are expected when another client already advanced turn.
       }
-    }, 180);
-
-    return () => clearInterval(timer);
-  }, [state?.matchId, state?.status]);
+    }, delay);
+    return () => window.clearTimeout(timeout);
+  }, [state?.revision, state?.turnDeadlineMs, state?.turnIndex, state?.status]);
 
   useEffect(() => {
     if (gameType !== 'CALLBREAK') return;
@@ -244,7 +252,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         msg.includes('Not in passing phase')
       ) {
         try {
-          const next = await serviceRef.current.pollDelta();
+          const next = await serviceRef.current.syncSnapshot();
           if (next) setState({ ...next });
           showMessage('State synced', 1200);
           return;
