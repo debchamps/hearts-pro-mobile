@@ -25,7 +25,7 @@ class PlayFabCloudScriptApi implements OnlineApi {
       body: JSON.stringify({
         FunctionName: functionName,
         FunctionParameter: payload,
-        GeneratePlayStreamEvent: true,
+        GeneratePlayStreamEvent: false,
       }),
     });
 

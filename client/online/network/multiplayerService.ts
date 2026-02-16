@@ -13,6 +13,11 @@ export class MultiplayerService {
   private listeners = new Set<(state: MultiplayerGameState, events: MatchEvent[]) => void>();
   private eventPumpTimer: number | null = null;
   private eventPumpRunning = false;
+  private eventPumpInFlight = false;
+
+  private static readonly EVENT_PUMP_FAST_MS = 35;
+  private static readonly EVENT_PUMP_IDLE_MS = 110;
+  private static readonly EVENT_PUMP_ERROR_MS = 220;
 
   private async ensureApi() {
     if (!this.api) {
@@ -58,6 +63,7 @@ export class MultiplayerService {
   async syncSnapshot() {
     const next = await this.resyncSnapshot();
     this.notify([]);
+    this.kickEventPumpNow();
     return next;
   }
 
@@ -76,6 +82,7 @@ export class MultiplayerService {
     this.applyEvents(res.events);
     if (this.state) listener(this.state, res.events);
     this.startEventPump();
+    this.kickEventPumpNow();
   }
 
   async unsubscribeFromMatch(listener?: (state: MultiplayerGameState, events: MatchEvent[]) => void) {
@@ -105,6 +112,56 @@ export class MultiplayerService {
     this.eventPumpRunning = true;
     const tick = async () => {
       if (!this.eventPumpRunning || !this.matchId || !this.subscriptionId) return;
+      if (this.eventPumpInFlight) return;
+      this.eventPumpInFlight = true;
+      try {
+        const api = await this.ensureApi();
+        const res = await api.subscribeToMatch({
+          matchId: this.matchId,
+          sinceEventId: this.lastEventId,
+          seat: this.seat,
+          subscriptionId: this.subscriptionId,
+        });
+        this.subscriptionId = res.subscriptionId;
+        this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
+        const events = res.events || [];
+        this.applyEvents(events);
+        if (this.eventPumpRunning) {
+          this.eventPumpTimer = window.setTimeout(tick, events.length > 0 ? MultiplayerService.EVENT_PUMP_FAST_MS : MultiplayerService.EVENT_PUMP_IDLE_MS);
+        }
+      } catch {
+        try {
+          await this.resyncSnapshot();
+          this.notify([]);
+        } catch {}
+        if (this.eventPumpRunning) {
+          this.eventPumpTimer = window.setTimeout(tick, MultiplayerService.EVENT_PUMP_ERROR_MS);
+        }
+      } finally {
+        this.eventPumpInFlight = false;
+      }
+    };
+    this.eventPumpTimer = window.setTimeout(tick, MultiplayerService.EVENT_PUMP_FAST_MS);
+  }
+
+  private stopEventPump() {
+    this.eventPumpRunning = false;
+    if (this.eventPumpTimer !== null) {
+      window.clearTimeout(this.eventPumpTimer);
+      this.eventPumpTimer = null;
+    }
+  }
+
+  private kickEventPumpNow() {
+    if (!this.eventPumpRunning) return;
+    if (this.eventPumpInFlight) return;
+    if (this.eventPumpTimer !== null) {
+      window.clearTimeout(this.eventPumpTimer);
+      this.eventPumpTimer = null;
+    }
+    this.eventPumpTimer = window.setTimeout(async () => {
+      if (!this.eventPumpRunning || !this.matchId || !this.subscriptionId || this.eventPumpInFlight) return;
+      this.eventPumpInFlight = true;
       try {
         const api = await this.ensureApi();
         const res = await api.subscribeToMatch({
@@ -117,25 +174,10 @@ export class MultiplayerService {
         this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
         this.applyEvents(res.events || []);
       } catch {
-        try {
-          await this.resyncSnapshot();
-          this.notify([]);
-        } catch {}
       } finally {
-        if (this.eventPumpRunning) {
-          this.eventPumpTimer = window.setTimeout(tick, 220);
-        }
+        this.eventPumpInFlight = false;
       }
-    };
-    this.eventPumpTimer = window.setTimeout(tick, 220);
-  }
-
-  private stopEventPump() {
-    this.eventPumpRunning = false;
-    if (this.eventPumpTimer !== null) {
-      window.clearTimeout(this.eventPumpTimer);
-      this.eventPumpTimer = null;
-    }
+    }, 0);
   }
 
   async submitMove(cardId: string): Promise<MultiplayerGameState> {
@@ -151,6 +193,7 @@ export class MultiplayerService {
       });
       this.state = applyDelta(this.state, delta);
       this.notify([]);
+      this.kickEventPumpNow();
       return this.state!;
     };
 
@@ -180,6 +223,7 @@ export class MultiplayerService {
       });
       this.state = applyDelta(this.state, delta);
       this.notify([]);
+      this.kickEventPumpNow();
       return this.state!;
     };
 
@@ -207,6 +251,7 @@ export class MultiplayerService {
       });
       this.state = applyDelta(this.state, delta);
       this.notify([]);
+      this.kickEventPumpNow();
       return this.state!;
     };
 
@@ -226,6 +271,7 @@ export class MultiplayerService {
     const delta = await api.timeoutMove({ matchId: this.matchId });
     this.state = applyDelta(this.state, delta);
     this.notify([]);
+    this.kickEventPumpNow();
     return this.state;
   }
 
