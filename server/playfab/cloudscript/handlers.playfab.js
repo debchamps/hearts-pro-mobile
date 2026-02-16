@@ -42,6 +42,7 @@ var cache = {
 
 var EVENT_LIMIT_PER_MATCH = 256;
 var MATCH_CHUNK_SIZE = 6000;
+var ENABLE_SYNC_DEBUG = true;
 
 function randomId(prefix) {
   return prefix + '_' + Math.random().toString(36).slice(2, 10);
@@ -82,6 +83,24 @@ function titleDataGetRaw(key) {
   } catch (e) {
     return null;
   }
+}
+
+function appendSyncDebug(matchId, step, data) {
+  if (!ENABLE_SYNC_DEBUG || !matchId) return;
+  try {
+    var key = 'debug_match_' + matchId;
+    var list = titleDataGet(key);
+    if (!Array.isArray(list)) list = [];
+    list.push({
+      ts: Date.now(),
+      step: step,
+      data: data || {}
+    });
+    if (list.length > 180) {
+      list = list.slice(list.length - 180);
+    }
+    titleDataSet(key, list);
+  } catch (e) {}
 }
 
 function cloneState(obj) {
@@ -1095,6 +1114,14 @@ function saveMatch(match, context) {
   // best-effort backup only
   titleDataSet('match_' + match.matchId, match);
   persistMatchChunked(match);
+  appendSyncDebug(match.matchId, 'saveMatch', {
+    revision: match.revision,
+    status: match.status,
+    phase: match.phase,
+    turnIndex: match.turnIndex,
+    seat0: match.players[0] && match.players[0].playFabId,
+    seat2: match.players[2] && match.players[2].playFabId
+  });
 }
 
 function getMatch(matchId, context) {
@@ -1137,8 +1164,17 @@ function getMatch(matchId, context) {
 
   if (newest) {
     cache.matches[matchId] = newest;
+    appendSyncDebug(matchId, 'getMatch.selected', {
+      playerId: pid,
+      selectedRevision: newest.revision || 0,
+      selectedStatus: newest.status,
+      selectedPhase: newest.phase,
+      selectedTurnIndex: newest.turnIndex,
+      selectedSeat2: newest.players && newest.players[2] ? newest.players[2].playFabId : null
+    });
     return newest;
   }
+  appendSyncDebug(matchId, 'getMatch.miss', { playerId: pid });
   throw new Error('Match not found');
 }
 
@@ -1206,6 +1242,14 @@ handlers.findMatch = function(args, context) {
   // Public quick-match queue by game type.
   var waitKey = 'waiting_' + gameType;
   var waiting = titleDataGet(waitKey);
+  if (waiting && waiting.matchId) {
+    appendSyncDebug(waiting.matchId, 'findMatch.waitingRead', {
+      playerId: playerId,
+      waitingOwner: waiting.ownerPlayFabId,
+      waitingMatchId: waiting.matchId,
+      gameType: gameType
+    });
+  }
   if (waiting && waiting.matchId && waiting.ownerPlayFabId && waiting.ownerPlayFabId !== playerId) {
     var existing = getMatch(waiting.matchId, context);
     var beforeExisting = cloneState(existing);
@@ -1225,6 +1269,14 @@ handlers.findMatch = function(args, context) {
     EventDispatcher.emit(existing, 'TURN_CHANGED', existing.turnIndex, { turnIndex: existing.turnIndex, phase: existing.phase, turnDeadlineMs: existing.turnDeadlineMs });
     runServerTurnChain(existing, existing.revision);
     saveMatch(existing, context);
+    appendSyncDebug(existing.matchId, 'findMatch.joinedExisting', {
+      playerId: playerId,
+      seat: 2,
+      revision: existing.revision,
+      status: existing.status,
+      phase: existing.phase,
+      turnIndex: existing.turnIndex
+    });
     titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
     return { matchId: existing.matchId, seat: 2, revision: existing.revision, changed: buildChangedState(beforeExisting, existing) };
   }
@@ -1234,6 +1286,13 @@ handlers.findMatch = function(args, context) {
   match.autoMoveOnTimeoutBySeat[0] = args.autoMoveOnTimeout !== false;
   EventDispatcher.emit(match, 'MATCH_CREATED', -1, { status: match.status, phase: match.phase });
   saveMatch(match, context);
+  appendSyncDebug(match.matchId, 'findMatch.createdWaiting', {
+    playerId: playerId,
+    seat: 0,
+    revision: match.revision,
+    status: match.status,
+    phase: match.phase
+  });
   titleDataSet(waitKey, {
     matchId: match.matchId,
     ownerPlayFabId: playerId,
@@ -1422,10 +1481,37 @@ handlers.subscribeToMatch = function(args, context) {
       payload: cloneState(match)
     }];
   }
+  appendSyncDebug(match.matchId, 'subscribeToMatch.return', {
+    playerId: playerId,
+    subscriptionId: subscriptionId,
+    sinceEventId: sinceEventId,
+    sinceRevision: sinceRevision,
+    returnedEvents: events.length,
+    latestEventId: EventDispatcher.latestId(match.matchId),
+    matchRevision: match.revision,
+    status: match.status,
+    phase: match.phase,
+    turnIndex: match.turnIndex
+  });
   return {
     subscriptionId: subscriptionId,
     latestEventId: EventDispatcher.latestId(match.matchId),
     events: events
+  };
+};
+
+handlers.getMatchDebug = function(args, context) {
+  var match = getMatch(args.matchId, context);
+  return {
+    matchId: match.matchId,
+    revision: match.revision,
+    status: match.status,
+    phase: match.phase,
+    turnIndex: match.turnIndex,
+    seat0: match.players[0] && match.players[0].playFabId,
+    seat2: match.players[2] && match.players[2].playFabId,
+    latestEventId: EventDispatcher.latestId(match.matchId),
+    debug: titleDataGet('debug_match_' + args.matchId) || []
   };
 };
 

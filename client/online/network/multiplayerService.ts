@@ -19,6 +19,7 @@ export class MultiplayerService {
   private static readonly EVENT_PUMP_FAST_MS = 35;
   private static readonly EVENT_PUMP_IDLE_MS = 110;
   private static readonly EVENT_PUMP_ERROR_MS = 220;
+  private static readonly DEBUG_SYNC = true;
 
   private async ensureApi() {
     if (!this.api) {
@@ -99,6 +100,11 @@ export class MultiplayerService {
 
   private applyEvents(events: MatchEvent[]) {
     if (!events.length) return;
+    if (MultiplayerService.DEBUG_SYNC) {
+      try {
+        console.log('[OnlineSync] events', events.map((e) => ({ id: e.eventId, type: e.type, rev: e.revision, actorSeat: e.actorSeat })));
+      } catch {}
+    }
     for (const evt of events) {
       this.state = applyDelta(this.state, {
         matchId: evt.matchId,
@@ -131,6 +137,19 @@ export class MultiplayerService {
         const events = res.events || [];
         this.applyEvents(events);
         if (events.length === 0) {
+          if (MultiplayerService.DEBUG_SYNC && this.state) {
+            try {
+              console.log('[OnlineSync] empty-loop', {
+                matchId: this.matchId,
+                sub: this.subscriptionId,
+                lastEventId: this.lastEventId,
+                revision: this.state.revision,
+                status: this.state.status,
+                phase: this.state.phase,
+                turnIndex: this.state.turnIndex,
+              });
+            } catch {}
+          }
           this.emptyEventLoops += 1;
           if (
             this.emptyEventLoops >= 10 &&
