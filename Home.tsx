@@ -7,6 +7,7 @@ import { translateAll } from './services/geminiService';
 import { Overlay } from './SharedComponents';
 import { Preferences } from '@capacitor/preferences';
 import { DebugAuthMode, getDebugAuthMode, setDebugAuthMode } from './client/online/network/authMode';
+import { getOnlineCoins, ONLINE_COIN_EVENT } from './client/online/network/coinWallet';
 
 const GAMES_LIST = [
   { id: 'hearts', name: 'Hearts', icon: '♥️', available: true, color: 'text-red-600' },
@@ -34,6 +35,8 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
   const [isTranslating, setIsTranslating] = useState(false);
   const [generatedJson, setGeneratedJson] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<DebugAuthMode>('GOOGLE');
+  const [activeMode, setActiveMode] = useState<'ONLINE' | 'OFFLINE'>('ONLINE');
+  const [onlineCoins, setOnlineCoins] = useState<number>(getOnlineCoins());
 
   useEffect(() => {
     leaderboardService.syncPendingScores();
@@ -55,6 +58,14 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
       if (savedMode) setAuthMode(savedMode);
     };
     loadTranslationsAndLang();
+
+    const refreshCoins = () => setOnlineCoins(getOnlineCoins());
+    window.addEventListener('storage', refreshCoins);
+    window.addEventListener(ONLINE_COIN_EVENT, refreshCoins as EventListener);
+    return () => {
+      window.removeEventListener('storage', refreshCoins);
+      window.removeEventListener(ONLINE_COIN_EVENT, refreshCoins as EventListener);
+    };
   }, []);
 
   const handleLanguageChange = (lang: Language) => {
@@ -109,6 +120,12 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
             <p className="text-white/40 text-[9px] font-black uppercase tracking-[0.4em]">{t('common.home')}</p>
          </div>
          <div className="flex gap-2">
+           {activeMode === 'ONLINE' && (
+             <div className="bg-yellow-500/90 text-black px-3 h-10 rounded-xl flex items-center justify-center gap-1.5 font-black text-[11px] uppercase tracking-wider shadow-lg">
+               <span>🪙</span>
+               <span>{onlineCoins}</span>
+             </div>
+           )}
            <button 
              onClick={() => setShowSettings(true)}
              className="bg-white/10 text-white w-10 h-10 rounded-xl flex items-center justify-center shadow-lg border border-white/10 active:scale-95 transition-all"
@@ -118,12 +135,30 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
            {onResumeGame && (
               <button 
                 onClick={onResumeGame}
-                className="bg-yellow-500 text-black px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-lg border-b-4 border-yellow-700 active:translate-y-1 transition-all"
+                disabled={activeMode !== 'OFFLINE'}
+                className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-lg border-b-4 active:translate-y-1 transition-all ${activeMode === 'OFFLINE' ? 'bg-yellow-500 text-black border-yellow-700' : 'bg-white/20 text-white/40 border-white/10 cursor-not-allowed'}`}
               >
                 Resume
               </button>
            )}
          </div>
+      </div>
+
+      <div className="px-6 pb-2">
+        <div className="grid grid-cols-2 gap-2 bg-black/30 border border-white/10 rounded-2xl p-1">
+          <button
+            onClick={() => setActiveMode('ONLINE')}
+            className={`h-10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeMode === 'ONLINE' ? 'bg-cyan-500 text-black' : 'bg-transparent text-white/60'}`}
+          >
+            Online
+          </button>
+          <button
+            onClick={() => setActiveMode('OFFLINE')}
+            className={`h-10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeMode === 'OFFLINE' ? 'bg-green-500 text-black' : 'bg-transparent text-white/60'}`}
+          >
+            Offline
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 pb-24 grid grid-cols-2 gap-4 content-start pt-4">
@@ -138,20 +173,16 @@ export function Home({ onSelectGame, onSelectOnlineGame, onResumeGame }: { onSel
                   <div className="flex flex-col items-center w-full gap-2">
                     <span className="text-lg font-black uppercase tracking-tight text-white mb-1">{game.name}</span>
                     {game.available ? (
-                      <div className="grid grid-cols-2 gap-2 w-full">
-                        <button
-                          onClick={() => onSelectGame(game.id.toUpperCase() as GameType)}
-                          className="py-2 rounded-xl bg-green-500 text-black text-[8px] font-black uppercase tracking-widest active:scale-95"
-                        >
-                          Offline
-                        </button>
-                        <button
-                          onClick={() => onSelectOnlineGame(game.id.toUpperCase() as GameType)}
-                          className="py-2 rounded-xl bg-cyan-500 text-black text-[8px] font-black uppercase tracking-widest active:scale-95"
-                        >
-                          Online
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => {
+                          const type = game.id.toUpperCase() as GameType;
+                          if (activeMode === 'ONLINE') onSelectOnlineGame(type);
+                          else onSelectGame(type);
+                        }}
+                        className={`w-full py-2 rounded-xl text-black text-[8px] font-black uppercase tracking-widest active:scale-95 ${activeMode === 'ONLINE' ? 'bg-cyan-500' : 'bg-green-500'}`}
+                      >
+                        {activeMode === 'ONLINE' ? 'Play Online' : 'Play Offline'}
+                      </button>
                     ) : (
                       <span className="text-[8px] font-black uppercase tracking-widest text-yellow-500/80">Coming Soon</span>
                     )}

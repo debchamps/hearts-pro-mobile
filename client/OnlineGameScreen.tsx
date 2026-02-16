@@ -5,6 +5,7 @@ import { MultiplayerService } from './online/network/multiplayerService';
 import { MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
+import { applyOnlineCoinDelta } from './online/network/coinWallet';
 
 export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onExit: () => void }) {
   const serviceRef = useRef<MultiplayerService>(new MultiplayerService());
@@ -203,6 +204,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       if (next.status === 'COMPLETED') {
         const finished = await serviceRef.current.finish();
         const mine = finished.rewards.find((r) => r.seat === selfSeat);
+        if (mine?.coinsDelta) applyOnlineCoinDelta(mine.coinsDelta);
         setResult(`Match complete. Coin delta: ${mine?.coinsDelta ?? 0}`);
       }
     } catch (e) {
@@ -404,8 +406,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       {phase === 'BIDDING' && state.turnIndex === selfSeat && (
         <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[150] bg-black/60 border border-white/10 rounded-2xl p-3">
           <div className="text-[10px] text-white/60 font-black uppercase tracking-widest mb-2 text-center">Select Bid</div>
-          <div className="grid grid-cols-4 gap-2">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((b) => (
+          <div className={`grid gap-2 ${gameType === 'SPADES' ? 'grid-cols-5' : 'grid-cols-4'}`}>
+            {(gameType === 'SPADES' ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] : [1, 2, 3, 4, 5, 6, 7, 8]).map((b) => (
               <button key={b} onClick={() => submitBid(b)} className="w-10 h-10 rounded-xl bg-yellow-500 text-black font-black">
                 {b}
               </button>

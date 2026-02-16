@@ -1,0 +1,73 @@
+{
+  "version": "1.0.0",
+  "philosophy": {
+    "style": "rule_based_intelligent",
+    "deterministic": true,
+    "hidden_state_access": false,
+    "external_ai_calls": false
+  },
+  "scoring_weights": {
+    "trick_win_value": 1.0,
+    "safety_value": 0.9,
+    "future_hand_value": 0.75,
+    "opponent_read_value": 0.7,
+    "score_pressure": 0.65,
+    "penalty_risk": 1.15
+  },
+  "decision_layers": [
+    "rule_filters",
+    "tactical_evaluation",
+    "strategic_intent",
+    "card_selection"
+  ],
+  "heuristics": {
+    "hearts": {
+      "queen_danger_boost": 24,
+      "moon_defense_trigger": 13,
+      "early_high_card_penalty": 8,
+      "passing": {
+        "priorities": [
+          "queen_of_spades",
+          "high_hearts",
+          "dangerous_high_cards"
+        ]
+      }
+    },
+    "spades": {
+      "bid_protection_bias": 1.25,
+      "bag_avoidance_bias": 0.9,
+      "trump_control_bias": 1.15
+    },
+    "callbreak": {
+      "conservative_bid_factor": 0.92,
+      "trump_preserve_bias": 1.1,
+      "overtrump_pressure_bias": 1.2
+    }
+  },
+  "inference_rules": [
+    "mark_suit_void_when_player_fails_to_follow",
+    "track_high_card_usage_to_reduce_future_high_card_probability",
+    "track_trump_pressure_from_spade_usage"
+  ],
+  "bidding_logic": {
+    "spades": "sure tricks + 0.5*probable tricks + short-suit ruff potential, conservatively floored, clamped 1..13",
+    "callbreak": "ComputerBidder-style non-trump honor probabilities + trumpability + extra spade points with pressure/risk refinement, clamped 1..8"
+  },
+  "risk_engine": {
+    "inputs": [
+      "score_gap",
+      "round_number",
+      "opponent_lead_state"
+    ],
+    "output": "risk_tolerance_0_to_1"
+  },
+  "difficulty_extension_hooks": [
+    "difficulty",
+    "personality"
+  ],
+  "non_goals": [
+    "monte_carlo",
+    "brute_force_tree_search",
+    "omniscient_inference"
+  ]
+}

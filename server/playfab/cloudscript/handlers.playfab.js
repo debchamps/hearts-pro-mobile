@@ -123,14 +123,25 @@ function newMatch(gameType, playerName, playerId) {
     trickLeaderIndex: 0,
     leadSuit: null,
     scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
+    tricksWon: { 0: 0, 1: 0, 2: 0, 3: 0 },
     roundNumber: 1,
     status: 'WAITING',
     phase: 'WAITING',
+    heartsBroken: false,
+    playedBySuit: { CLUBS: 0, DIAMONDS: 0, HEARTS: 0, SPADES: 0 },
+    playedCardIds: {},
     passingSelections: { 0: [], 1: [], 2: [], 3: [] },
     passingDirection: 'LEFT',
     turnDeadlineMs: now + HUMAN_TIMEOUT_MS,
     serverTimeMs: now
   };
+}
+
+function ensureTracking(match) {
+  if (!match.playedBySuit) match.playedBySuit = { CLUBS: 0, DIAMONDS: 0, HEARTS: 0, SPADES: 0 };
+  if (!match.playedCardIds) match.playedCardIds = {};
+  if (match.heartsBroken === undefined || match.heartsBroken === null) match.heartsBroken = false;
+  if (!match.tricksWon) match.tricksWon = { 0: 0, 1: 0, 2: 0, 3: 0 };
 }
 
 function getTurnTimeout(match, seat) {
@@ -198,13 +209,17 @@ function startMatchIfReady(match) {
   match.deck = deck;
   match.currentTrick = [];
   match.leadSuit = null;
+  match.heartsBroken = false;
+  match.playedBySuit = { CLUBS: 0, DIAMONDS: 0, HEARTS: 0, SPADES: 0 };
+  match.playedCardIds = {};
   match.turnIndex = 0;
   match.trickLeaderIndex = 0;
   match.passingSelections = { 0: [], 1: [], 2: [], 3: [] };
   match.bids = { 0: null, 1: null, 2: null, 3: null };
+  match.tricksWon = { 0: 0, 1: 0, 2: 0, 3: 0 };
   if (match.gameType === 'HEARTS') {
     match.phase = 'PASSING';
-  } else if (match.gameType === 'CALLBREAK') {
+  } else if (match.gameType === 'CALLBREAK' || match.gameType === 'SPADES') {
     match.phase = 'BIDDING';
   } else {
     match.phase = 'PLAYING';
@@ -258,8 +273,88 @@ function finalizePassing(match) {
 
 function autoBid(match, seat) {
   var hand = match.hands[seat] || [];
-  var high = hand.filter(function(c) { return c.value >= 11; }).length;
-  var bid = Math.max(1, Math.min(8, Math.round(high / 2)));
+  var spades = hand.filter(function(c) { return c.suit === 'SPADES'; });
+  var sides = ['CLUBS', 'DIAMONDS', 'HEARTS'].map(function(suit) {
+    return hand.filter(function(c) { return c.suit === suit; });
+  });
+
+  function hasVal(cards, value) {
+    var i;
+    for (i = 0; i < cards.length; i++) if (cards[i].value === value) return true;
+    return false;
+  }
+  function nonTrumpProb(card, suitCards) {
+    var suitedCount = suitCards.length;
+    var hasAce = hasVal(suitCards, 14);
+    if (card.value === 14) return 1.0;
+    if (card.value === 13) {
+      if (hasAce) {
+        if (suitedCount === 2) return 1.0;
+        if (suitedCount === 3) return 0.8;
+        if (suitedCount === 4) return 0.3;
+        return 0.1;
+      }
+      if (suitedCount === 1) return 0;
+      if (suitedCount === 2) return 0.5;
+      if (suitedCount === 3) return 0.6;
+      if (suitedCount === 4) return 0.3;
+      return 0.1;
+    }
+    if (card.value === 12) {
+      if (hasAce) {
+        if (suitedCount === 2 || suitedCount === 3) return 0.4;
+        if (suitedCount === 4) return 0.1;
+        return 0;
+      }
+      if (suitedCount === 1) return 0;
+      if (suitedCount === 2) return 0.4;
+      if (suitedCount === 3) return 0.3;
+      return 0;
+    }
+    return 0;
+  }
+
+  var nonTrump = 0;
+  sides.forEach(function(suitCards) {
+    suitCards.forEach(function(card) {
+      nonTrump += nonTrumpProb(card, suitCards);
+    });
+  });
+  var trumpable = sides.reduce(function(acc, suitCards) { return acc + Math.max(0, 3 - suitCards.length); }, 0);
+  var trumpPoint = 0;
+  if (spades.length === 2) trumpPoint = Math.min(1, trumpable);
+  else if (spades.length === 3) trumpPoint = Math.min(2, trumpable);
+  else if (spades.length > 3) trumpPoint = Math.min(3, trumpable);
+  var extraSpade = Math.max(0, spades.length - (hasVal(spades, 14) && hasVal(spades, 13) ? 4 : hasVal(spades, 14) ? 4.5 : 5));
+  var base = nonTrump + trumpPoint + extraSpade;
+  var deduction = base >= 8 ? 2 : base >= 5 ? 1 : 0;
+  var initial = Math.round(base - deduction);
+  var nilSafe = (function() {
+    if (spades.length > 3) return false;
+    if (spades.some(function(c) { return c.value > 11; })) return false;
+    var i;
+    for (i = 0; i < sides.length; i++) {
+      var suitCards = sides[i];
+      if (suitCards.length <= 3 && suitCards.some(function(c) { return c.value > 11; })) return false;
+    }
+    return true;
+  })();
+
+  var bid;
+  if (match.gameType === 'SPADES') {
+    var knownOtherBids = 0;
+    var si;
+    for (si = 0; si < 4; si++) {
+      if (si === seat) continue;
+      var b = match.bids && match.bids[si];
+      if (typeof b === 'number') knownOtherBids += b;
+    }
+    var maxAllowed = Math.max(0, 13 - knownOtherBids);
+    bid = initial <= 1 && nilSafe ? 0 : Math.max(1, initial);
+    bid = Math.min(13, Math.min(maxAllowed, bid));
+  } else {
+    bid = Math.max(1, Math.min(8, Math.round((base - deduction) * 0.92)));
+  }
   match.bids[seat] = bid;
 }
 
@@ -299,13 +394,346 @@ function resolveTrickWinner(match) {
 }
 
 function fallbackCard(match, seat) {
-  var hand = match.hands[seat] || [];
-  if (hand.length > 0) return hand[0];
+  var hand = legalMovesForSeat(match, seat);
+  if (hand.length > 0) {
+    hand.sort(function(a, b) { return a.value - b.value; });
+    return hand[0];
+  }
   return { id: '2-CLUBS', suit: 'CLUBS', rank: '2', value: 2, points: 0 };
+}
+
+function highestRemainingValue(match, suit) {
+  ensureTracking(match);
+  var v;
+  for (v = 14; v >= 2; v--) {
+    var rank = v <= 10 ? String(v) : (v === 11 ? 'J' : v === 12 ? 'Q' : v === 13 ? 'K' : 'A');
+    if (!match.playedCardIds[rank + '-' + suit]) return v;
+  }
+  return 2;
+}
+
+function lowestCard(cards) {
+  var sorted = cards.slice().sort(function(a, b) {
+    if (a.value !== b.value) return a.value - b.value;
+    return String(a.suit).localeCompare(String(b.suit));
+  });
+  return sorted[0];
+}
+
+function highestCard(cards) {
+  var sorted = cards.slice().sort(function(a, b) { return b.value - a.value; });
+  return sorted[0];
+}
+
+function currentWinnerCard(match) {
+  if (!match.currentTrick || !match.currentTrick.length) return null;
+  var leadSuit = match.currentTrick[0].card.suit;
+  var winner = match.currentTrick[0].card;
+  var i;
+  for (i = 1; i < match.currentTrick.length; i++) {
+    var c = match.currentTrick[i].card;
+    if (c.suit === leadSuit && winner.suit === leadSuit && c.value > winner.value) winner = c;
+  }
+  return winner;
+}
+
+function legalMovesForSeat(match, seat) {
+  var hand = (match.hands[seat] || []).slice();
+  if (!hand.length) return [];
+  var leadSuit = match.leadSuit;
+  if (!leadSuit) {
+    if (match.gameType === 'HEARTS') {
+      var totalCards = 0;
+      var i;
+      for (i = 0; i < 4; i++) totalCards += (match.hands[i] || []).length;
+      var has2C = hand.some(function(c) { return c.id === '2-CLUBS'; });
+      if (totalCards === 52 && has2C) return hand.filter(function(c) { return c.id === '2-CLUBS'; });
+      if (!match.heartsBroken) {
+        var nonHearts = hand.filter(function(c) { return c.suit !== 'HEARTS'; });
+        return nonHearts.length ? nonHearts : hand;
+      }
+    }
+    return hand;
+  }
+  var follow = hand.filter(function(c) { return c.suit === leadSuit; });
+  if (follow.length) return follow;
+  if (match.gameType === 'CALLBREAK') {
+    var spades = hand.filter(function(c) { return c.suit === 'SPADES'; });
+    if (spades.length) return spades;
+  }
+  return hand;
+}
+
+function chooseHeartsBotCard(match, seat, legal) {
+  ensureTracking(match);
+  var hand = legal.slice();
+  if (!hand.length) return '';
+
+  if (match.currentTrick.length === 0) {
+    var smallSpade = hand.filter(function(c) { return c.suit === 'SPADES' && c.value <= 11; });
+    var highSpade = hand.filter(function(c) { return c.suit === 'SPADES' && c.value >= 12; });
+    if (smallSpade.length && !highSpade.length) return lowestCard(smallSpade).id;
+
+    var dOrC = ['DIAMONDS', 'CLUBS'];
+    var si;
+    for (si = 0; si < dOrC.length; si++) {
+      var suit = dOrC[si];
+      var suited = hand.filter(function(c) { return c.suit === suit; });
+      if (!suited.length) continue;
+      var hi = highestCard(suited);
+      if (hi.value === highestRemainingValue(match, suit) && hi.value >= 11) return hi.id;
+      return lowestCard(suited).id;
+    }
+
+    var lowHearts = hand.filter(function(c) { return c.suit === 'HEARTS' && c.value <= 4; });
+    if (lowHearts.length) return lowestCard(lowHearts).id;
+    return lowestCard(hand).id;
+  }
+
+  var leadSuit = match.leadSuit;
+  var winner = currentWinnerCard(match);
+
+  if (!hand.every(function(c) { return c.suit === leadSuit; })) {
+    var qs = hand.find(function(c) { return c.id === 'Q-SPADES'; });
+    if (qs) return qs.id;
+    var highHearts = hand.filter(function(c) { return c.suit === 'HEARTS'; });
+    if (highHearts.length) return highestCard(highHearts).id;
+    return highestCard(hand).id;
+  }
+
+  if (leadSuit === 'HEARTS') {
+    var lowerH = hand.filter(function(c) { return winner && c.value < winner.value; });
+    if (lowerH.length) return highestCard(lowerH).id;
+    return lowestCard(hand).id;
+  }
+  if (leadSuit === 'SPADES') {
+    var hasQS = hand.some(function(c) { return c.id === 'Q-SPADES'; });
+    if (winner && winner.value >= 13 && hasQS) return 'Q-SPADES';
+    var lowerS = hand.filter(function(c) { return winner && c.value < winner.value; });
+    var nonQ = hand.filter(function(c) { return c.id !== 'Q-SPADES'; });
+    if (lowerS.length) return highestCard(lowerS).id;
+    if (nonQ.length) return lowestCard(nonQ).id;
+    return lowestCard(hand).id;
+  }
+
+  var lowerM = hand.filter(function(c) { return winner && c.value < winner.value; });
+  if (lowerM.length) return highestCard(lowerM).id;
+  return lowestCard(hand).id;
+}
+
+function chooseCallbreakBotCard(match, seat, legal) {
+  ensureTracking(match);
+  var hand = legal.slice();
+  if (!hand.length) return '';
+
+  if (match.currentTrick.length === 0) {
+    var trickNo = 14 - ((match.hands[seat] || []).length);
+    var spades = hand.filter(function(c) { return c.suit === 'SPADES'; });
+    if (trickNo >= 3 && spades.length >= Math.floor((match.hands[seat] || []).length / 2) - 1) {
+      var hi = highestCard(spades);
+      if (hi.value === highestRemainingValue(match, 'SPADES')) return hi.id;
+    }
+    var aces = hand.filter(function(c) { return c.value === 14; });
+    if (aces.length) return aces[0].id;
+    var nonSpades = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+    if (nonSpades.length) return lowestCard(nonSpades).id;
+    return lowestCard(hand).id;
+  }
+
+  var winner = resolveTrickWinningCard(match);
+  var canAnyWin = hand.some(function(c) { return canBeatForTrumpGames(c, winner, match.leadSuit); });
+  if (!canAnyWin) return lowestCard(hand).id;
+
+  if (hand.every(function(c) { return c.suit === match.leadSuit; })) {
+    if (match.currentTrick.length === 3) return lowestCard(hand).id;
+    var over = hand.filter(function(c) { return canBeatForTrumpGames(c, winner, match.leadSuit); }).sort(function(a, b) { return a.value - b.value; });
+    if (over.length) return over[0].id;
+    return lowestCard(hand).id;
+  }
+  var nonTrump = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+  if (nonTrump.length) return lowestCard(nonTrump).id;
+  return lowestCard(hand).id;
+}
+
+function chooseSpadesBotCard(match, seat, legal) {
+  ensureTracking(match);
+  var hand = legal.slice();
+  if (!hand.length) return '';
+
+  function isNilActive(s) {
+    var b = match.bids && match.bids[s];
+    var won = (match.tricksWon && match.tricksWon[s]) || 0;
+    return b === 0 && won === 0;
+  }
+  function partnerSeat(s) { return (s + 2) % 4; }
+  function hasVal(cards, val) {
+    var i;
+    for (i = 0; i < cards.length; i++) if (cards[i].value === val) return true;
+    return false;
+  }
+  function aceMove(cards) {
+    var aces = cards.filter(function(c) { return c.value === 14; });
+    var i;
+    for (i = 0; i < aces.length; i++) {
+      var ace = aces[i];
+      var suited = cards.filter(function(c) { return c.suit === ace.suit; });
+      var hasK = hasVal(suited, 13);
+      var hasQ = hasVal(suited, 12);
+      if (!hasQ || hasK) return ace;
+    }
+    return null;
+  }
+  function canBeat(card, winner, leadSuit) {
+    if (!winner) return true;
+    var winnerTrump = winner.suit === 'SPADES';
+    var cardTrump = card.suit === 'SPADES';
+    if (cardTrump && !winnerTrump) return true;
+    if (cardTrump === winnerTrump && card.suit === winner.suit && card.value > winner.value) return true;
+    if (!winnerTrump && card.suit === leadSuit && winner.suit === leadSuit && card.value > winner.value) return true;
+    return false;
+  }
+  function minorLeadWinner(cards) {
+    var suits = ['CLUBS', 'DIAMONDS', 'HEARTS'];
+    var i;
+    for (i = 0; i < suits.length; i++) {
+      var suit = suits[i];
+      var suited = cards.filter(function(c) { return c.suit === suit; });
+      if (!suited.length) continue;
+      var hi = highestCard(suited);
+      if (hi.value === highestRemainingValue(match, suit) && hi.value !== 14) return hi;
+    }
+    return null;
+  }
+
+  if (match.currentTrick.length === 0) {
+    if (isNilActive(seat)) {
+      var nonSpadesNil = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+      if (nonSpadesNil.length) return lowestCard(nonSpadesNil).id;
+      return lowestCard(hand).id;
+    }
+    var ace = aceMove(hand);
+    if (ace) return ace.id;
+    var spades = hand.filter(function(c) { return c.suit === 'SPADES'; });
+    var trickNo = 14 - ((match.hands[seat] || []).length);
+    if (trickNo >= 3 && spades.length >= Math.floor((match.hands[seat] || []).length / 2) - 1) {
+      var hiSpade = highestCard(spades);
+      if (hiSpade.value === highestRemainingValue(match, 'SPADES')) return hiSpade.id;
+    }
+    var winMinor = minorLeadWinner(hand);
+    if (winMinor) return winMinor.id;
+    var nonSpades = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+    if (nonSpades.length) return lowestCard(nonSpades).id;
+    return lowestCard(hand).id;
+  }
+
+  var winner = resolveTrickWinningCard(match);
+  var winnerSeat = resolveTrickWinner(match);
+  var partner = partnerSeat(seat);
+  var partnerWinning = winnerSeat === partner;
+  var partnerNil = isNilActive(partner);
+  var opponentNil = isNilActive(winnerSeat) && !partnerWinning;
+
+  if (isNilActive(seat)) {
+    var losing = hand.filter(function(c) { return !canBeat(c, winner, match.leadSuit); });
+    if (losing.length) {
+      // Keep the highest guaranteed-losing card to burn risk.
+      return highestCard(losing).id;
+    }
+    var nonTrump = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+    if (nonTrump.length) return highestCard(nonTrump).id;
+    return lowestCard(hand).id;
+  }
+
+  var canAnyWin = hand.some(function(c) { return canBeat(c, winner, match.leadSuit); });
+  if (!canAnyWin) return lowestCard(hand).id;
+
+  if (hand.every(function(c) { return c.suit === match.leadSuit; })) {
+    if (match.currentTrick.length === 3) {
+      if (partnerWinning && !partnerNil) return lowestCard(hand).id;
+      var higher4 = hand.filter(function(c) { return canBeat(c, winner, match.leadSuit); }).sort(function(a, b) { return a.value - b.value; });
+      if (higher4.length && !opponentNil) return higher4[0].id;
+      return lowestCard(hand).id;
+    }
+    if (partnerWinning) {
+      if (partnerNil) {
+        var savePartner = hand.filter(function(c) { return canBeat(c, winner, match.leadSuit); }).sort(function(a, b) { return b.value - a.value; });
+        if (savePartner.length) return savePartner[0].id;
+      }
+      return lowestCard(hand).id;
+    }
+    var aceSuit = hand.find(function(c) { return c.value === 14; });
+    if (aceSuit && winner && winner.suit === match.leadSuit) return aceSuit.id;
+    var over = hand.filter(function(c) { return canBeat(c, winner, match.leadSuit); }).sort(function(a, b) { return a.value - b.value; });
+    if (over.length && !opponentNil) return over[0].id;
+    return lowestCard(hand).id;
+  }
+
+  // Void in lead suit: trump only if needed and safe for nil dynamics.
+  var trumps = hand.filter(function(c) { return c.suit === 'SPADES'; });
+  if (trumps.length) {
+    if (partnerWinning && !partnerNil) {
+      var nonTr = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+      if (nonTr.length) return lowestCard(nonTr).id;
+      return lowestCard(trumps).id;
+    }
+    if (opponentNil) {
+      var nonTr2 = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+      if (nonTr2.length) return lowestCard(nonTr2).id;
+      return lowestCard(trumps).id;
+    }
+    if (!winner || winner.suit !== 'SPADES') return lowestCard(trumps).id;
+    var overTrump = trumps.filter(function(c) { return c.value > winner.value; }).sort(function(a, b) { return a.value - b.value; });
+    if (overTrump.length) return overTrump[0].id;
+  }
+  var nonTrumpFallback = hand.filter(function(c) { return c.suit !== 'SPADES'; });
+  if (nonTrumpFallback.length) return lowestCard(nonTrumpFallback).id;
+  return lowestCard(hand).id;
+}
+
+function resolveTrickWinningCard(match) {
+  if (!match.currentTrick || !match.currentTrick.length) return null;
+  var leadSuit = match.currentTrick[0].card.suit;
+  var winner = match.currentTrick[0].card;
+  var i;
+  for (i = 1; i < match.currentTrick.length; i++) {
+    var curr = match.currentTrick[i].card;
+    var winnerTrump = winner.suit === 'SPADES';
+    var currTrump = curr.suit === 'SPADES';
+    if (currTrump && !winnerTrump) {
+      winner = curr;
+      continue;
+    }
+    if (currTrump === winnerTrump) {
+      var cmpSuit = winnerTrump ? 'SPADES' : leadSuit;
+      if (curr.suit === cmpSuit && winner.suit === cmpSuit && curr.value > winner.value) winner = curr;
+    }
+  }
+  return winner;
+}
+
+function canBeatForTrumpGames(card, winner, leadSuit) {
+  if (!winner) return true;
+  var winnerTrump = winner.suit === 'SPADES';
+  var cardTrump = card.suit === 'SPADES';
+  if (cardTrump && !winnerTrump) return true;
+  if (cardTrump === winnerTrump && card.suit === winner.suit && card.value > winner.value) return true;
+  if (!winnerTrump && card.suit === leadSuit && winner.suit === leadSuit && card.value > winner.value) return true;
+  return false;
+}
+
+function chooseBotCard(match, seat) {
+  var legal = legalMovesForSeat(match, seat);
+  if (!legal.length) return '';
+  if (match.gameType === 'HEARTS') return chooseHeartsBotCard(match, seat, legal);
+  if (match.gameType === 'SPADES') return chooseSpadesBotCard(match, seat, legal);
+  if (match.gameType === 'CALLBREAK') return chooseCallbreakBotCard(match, seat, legal);
+  legal.sort(function(a, b) { return a.value - b.value; });
+  return legal[0].id;
 }
 
 function applyMove(match, seat, cardId, allowFallback) {
   if (match.status !== 'PLAYING') throw new Error('Match not active');
+  ensureTracking(match);
   if (match.turnIndex !== seat) throw new Error('Not your turn');
   var hand = match.hands[seat] || [];
   var idx = -1;
@@ -336,6 +764,9 @@ function applyMove(match, seat, cardId, allowFallback) {
 
   match.currentTrick.push({ seat: seat, card: card });
   if (match.currentTrick.length === 1) match.leadSuit = card.suit;
+  match.playedBySuit[card.suit] = (match.playedBySuit[card.suit] || 0) + 1;
+  match.playedCardIds[card.id] = true;
+  if (card.suit === 'HEARTS') match.heartsBroken = true;
 
   if (match.currentTrick.length < 4) {
     match.turnIndex = (seat + 1) % 4;
@@ -351,6 +782,7 @@ function applyMove(match, seat, cardId, allowFallback) {
     trickPoints += match.currentTrick[k].card.points || 0;
   }
   match.scores[winner] = (match.scores[winner] || 0) + trickPoints;
+  match.tricksWon[winner] = (match.tricksWon[winner] || 0) + 1;
   match.currentTrick = [];
   match.lastCompletedTrick = {
     trick: completedTrick,
@@ -396,7 +828,8 @@ function runServerTurn(match) {
     return true;
   }
 
-  applyMove(match, match.turnIndex, '', true);
+  var cardId = chooseBotCard(match, match.turnIndex);
+  applyMove(match, match.turnIndex, cardId, true);
   return true;
 }
 
@@ -625,7 +1058,12 @@ handlers.submitBid = function(args, context) {
   if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
   if (args.seat !== match.turnIndex) throw new Error('Not your turn');
   if (isSeatBotOrDisconnected(match, args.seat)) throw new Error('Bot seat cannot submit bid');
-  if (typeof args.bid !== 'number' || args.bid < 1 || args.bid > 8) throw new Error('Bid must be between 1 and 8');
+  if (typeof args.bid !== 'number') throw new Error('Bid must be a number');
+  if (match.gameType === 'SPADES') {
+    if (args.bid < 0 || args.bid > 13) throw new Error('Bid must be between 0 and 13 for Spades');
+  } else {
+    if (args.bid < 1 || args.bid > 8) throw new Error('Bid must be between 1 and 8');
+  }
 
   match.bids[args.seat] = Math.floor(args.bid);
   if (!finalizeBidding(match)) {
@@ -663,7 +1101,8 @@ handlers.timeoutMove = function(args, context) {
   if (Date.now() < match.turnDeadlineMs) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
-  applyMove(match, match.turnIndex, '', true);
+  var timeoutCard = chooseBotCard(match, match.turnIndex);
+  applyMove(match, match.turnIndex, timeoutCard, true);
   bump(match);
   saveMatch(match, context);
   return deltaFor(match);

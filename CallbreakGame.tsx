@@ -12,6 +12,7 @@ const SOUNDS = {
   PLAY: 'https://cdn.pixabay.com/audio/2022/03/10/audio_f53093282f.mp3',
   CLEAR: 'https://cdn.pixabay.com/audio/2022/03/10/audio_c3523e4291.mp3',
 };
+const OFFLINE_BOT_THINK_DELAY_MS = 450;
 
 const playSound = (url: string, volume = 0.4) => {
   try {
@@ -197,6 +198,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
     if (gameState.phase === 'PLAYING' && activePlayer && !activePlayer.isHuman && !isProcessing && !clearingTrick && gameState.currentTrick.length < 4) {
       const runAi = async () => {
         setIsProcessing(true);
+        await new Promise((r) => setTimeout(r, OFFLINE_BOT_THINK_DELAY_MS));
         const cardId = await getCallbreakMove(activePlayer.hand, gameState.currentTrick, gameState.leadSuit, gameState.settings.mandatoryOvertrump);
         if (cardId) playCard(gameState.turnIndex, cardId);
         setIsProcessing(false);
