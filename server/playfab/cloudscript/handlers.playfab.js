@@ -1315,6 +1315,18 @@ handlers.subscribeToMatch = function(args, context) {
     : SubscriptionManager.subscribe(match.matchId, playerId);
   var sinceEventId = Number((args && args.sinceEventId) || 0);
   var events = EventDispatcher.since(match.matchId, sinceEventId);
+  var sinceRevision = Number((args && args.sinceRevision) || 0);
+  if (events.length === 0 && sinceRevision < match.revision) {
+    events = [{
+      eventId: EventDispatcher.latestId(match.matchId),
+      type: 'TURN_CHANGED',
+      matchId: match.matchId,
+      revision: match.revision,
+      timestamp: Date.now(),
+      actorSeat: typeof match.turnIndex === 'number' ? match.turnIndex : -1,
+      payload: cloneState(match)
+    }];
+  }
   return {
     subscriptionId: subscriptionId,
     latestEventId: EventDispatcher.latestId(match.matchId),

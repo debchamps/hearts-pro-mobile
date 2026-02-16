@@ -121,7 +121,7 @@ export interface OnlineApi {
   submitPass?(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }): Promise<GameStateDelta>;
   submitBid?(input: { matchId: string; seat: number; bid: number; expectedRevision: number }): Promise<GameStateDelta>;
   getSnapshot(input: { matchId: string; seat?: number }): Promise<GameStateDelta>;
-  subscribeToMatch(input: { matchId: string; sinceEventId?: number; seat?: number; subscriptionId?: string }): Promise<MatchSubscriptionResult>;
+  subscribeToMatch(input: { matchId: string; sinceEventId?: number; sinceRevision?: number; seat?: number; subscriptionId?: string }): Promise<MatchSubscriptionResult>;
   unsubscribeFromMatch(input: { matchId: string; subscriptionId: string }): Promise<{ ok: boolean }>;
   timeoutMove(input: { matchId: string }): Promise<GameStateDelta>;
   endMatch(input: { matchId: string }): Promise<MatchResult>;

@@ -277,9 +277,26 @@ export function subscribeToMatch(args, context = {}) {
     bucket[subscriptionId] = { playerId: context?.currentPlayerId || 'LOCAL_PLAYER', createdAt: Date.now() };
   }
   const sinceEventId = Number(args.sinceEventId || 0);
+  const sinceRevision = Number(args.sinceRevision || 0);
+  const events = stream.events.filter((evt) => evt.eventId > sinceEventId);
+  if (events.length === 0 && sinceRevision < match.revision) {
+    return {
+      subscriptionId,
+      events: [{
+        eventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
+        type: 'TURN_CHANGED',
+        matchId: match.matchId,
+        revision: match.revision,
+        timestamp: Date.now(),
+        actorSeat: typeof match.turnIndex === 'number' ? match.turnIndex : -1,
+        payload: cloneState(match),
+      }],
+      latestEventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
+    };
+  }
   return {
     subscriptionId,
-    events: stream.events.filter((evt) => evt.eventId > sinceEventId),
+    events,
     latestEventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
   };
 }

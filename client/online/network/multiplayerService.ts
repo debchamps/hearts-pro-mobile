@@ -74,6 +74,7 @@ export class MultiplayerService {
     const res = await api.subscribeToMatch({
       matchId: this.matchId,
       sinceEventId: this.lastEventId,
+      sinceRevision: this.state?.revision || 0,
       seat: this.seat,
       subscriptionId: this.subscriptionId ?? undefined,
     });
@@ -119,6 +120,7 @@ export class MultiplayerService {
         const res = await api.subscribeToMatch({
           matchId: this.matchId,
           sinceEventId: this.lastEventId,
+          sinceRevision: this.state?.revision || 0,
           seat: this.seat,
           subscriptionId: this.subscriptionId,
         });
@@ -167,6 +169,7 @@ export class MultiplayerService {
         const res = await api.subscribeToMatch({
           matchId: this.matchId,
           sinceEventId: this.lastEventId,
+          sinceRevision: this.state?.revision || 0,
           seat: this.seat,
           subscriptionId: this.subscriptionId,
         });

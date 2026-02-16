@@ -158,6 +158,23 @@ export const localOnlineApi: OnlineApi = {
     }
     const sinceEventId = input.sinceEventId || 0;
     const events = store.events.filter((event) => event.eventId > sinceEventId);
+    const sinceRevision = Number(input.sinceRevision || 0);
+    if (events.length === 0 && sinceRevision < store.state.revision) {
+      const synthetic: MatchEvent = {
+        eventId: store.events.length ? store.events[store.events.length - 1].eventId : 0,
+        type: 'TURN_CHANGED',
+        matchId: store.state.matchId,
+        revision: store.state.revision,
+        timestamp: Date.now(),
+        actorSeat: store.state.turnIndex,
+        payload: cloneState(store.state),
+      };
+      return {
+        subscriptionId,
+        events: [synthetic],
+        latestEventId: store.events.length ? store.events[store.events.length - 1].eventId : 0,
+      };
+    }
     return {
       subscriptionId,
       events,
