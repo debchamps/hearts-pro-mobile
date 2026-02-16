@@ -428,7 +428,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
                 if (phase === 'PASSING') togglePassCard(item.card.id);
                 else submit(item.card.id);
               }}
-              disabled={state.status !== 'PLAYING' || phase !== 'PLAYING'}
+              disabled={state.status !== 'PLAYING' || (phase !== 'PLAYING' && phase !== 'PASSING')}
               className={`absolute card-fan-item animate-deal ${state.turnIndex === selfSeat ? 'cursor-pointer active:-translate-y-2' : 'opacity-70 cursor-default'}`}
               style={{
                 transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.32 + (phase === 'PASSING' && selectedPassIds.includes(item.card.id) ? -80 : 0)}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg)`,

@@ -24,6 +24,10 @@ function createSubscriptionId() {
   return `sub_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function cloneState<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 function emitEvent(store: MatchStore, type: MatchEvent['type'], actorSeat = -1, payload?: Partial<MultiplayerGameState>) {
   const event: MatchEvent = {
     eventId: store.nextEventId++,
@@ -32,7 +36,7 @@ function emitEvent(store: MatchStore, type: MatchEvent['type'], actorSeat = -1, 
     revision: store.state.revision,
     timestamp: Date.now(),
     actorSeat,
-    payload: payload || store.state,
+    payload: cloneState((payload || store.state) as Partial<MultiplayerGameState>),
   };
   store.events.push(event);
   if (store.events.length > 200) {

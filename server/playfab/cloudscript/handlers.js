@@ -38,6 +38,10 @@ function ensureEventStream(matchId) {
   return stateStore.events.get(matchId);
 }
 
+function cloneState(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 function emitEvent(match, type, actorSeat = -1, payload = {}) {
   const stream = ensureEventStream(match.matchId);
   const evt = {
@@ -47,7 +51,7 @@ function emitEvent(match, type, actorSeat = -1, payload = {}) {
     revision: match.revision,
     timestamp: Date.now(),
     actorSeat,
-    payload,
+    payload: cloneState(payload || match),
   };
   stream.events.push(evt);
   if (stream.events.length > 200) stream.events.splice(0, stream.events.length - 200);
