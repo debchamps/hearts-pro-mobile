@@ -49,6 +49,22 @@ export class MultiplayerService {
     return this.state;
   }
 
+  getSyncDebug() {
+    return {
+      matchId: this.matchId,
+      seat: this.seat,
+      revision: this.state?.revision ?? 0,
+      status: this.state?.status ?? 'NA',
+      phase: this.state?.phase ?? 'NA',
+      turnIndex: this.state?.turnIndex ?? -1,
+      lastEventId: this.lastEventId,
+      subscriptionId: this.subscriptionId,
+      eventPumpRunning: this.eventPumpRunning,
+      eventPumpInFlight: this.eventPumpInFlight,
+      emptyEventLoops: this.emptyEventLoops,
+    };
+  }
+
   private notify(events: MatchEvent[] = []) {
     if (!this.state) return;
     this.listeners.forEach((listener) => listener(this.state!, events));

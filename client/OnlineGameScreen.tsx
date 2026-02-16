@@ -18,6 +18,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<string>('');
   const [message, setMessage] = useState<string>('');
+  const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  const [debugTapCount, setDebugTapCount] = useState(0);
   const [renderTrick, setRenderTrick] = useState<Array<{ seat: number; card: any }>>([]);
   const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
   const [clockMs, setClockMs] = useState<number>(Date.now());
@@ -83,6 +85,12 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     const timer = window.setInterval(() => setClockMs(Date.now()), 100);
     return () => window.clearInterval(timer);
   }, [gameType]);
+
+  useEffect(() => {
+    if (debugTapCount <= 0) return;
+    const timer = window.setTimeout(() => setDebugTapCount(0), 1200);
+    return () => window.clearTimeout(timer);
+  }, [debugTapCount]);
 
   const showMessage = (text: string, ms = 1500) => {
     setMessage(text);
@@ -320,12 +328,27 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   }
 
   if (!state) return null;
+  const syncDebug = serviceRef.current.getSyncDebug();
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden text-white">
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <button className="px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-xs font-black uppercase" onClick={onExit}>Exit</button>
-        <div className="text-sm uppercase font-black tracking-widest">{state.gameType} Online</div>
+        <button
+          type="button"
+          className="text-sm uppercase font-black tracking-widest px-2 py-1"
+          onClick={() => {
+            const next = debugTapCount + 1;
+            if (next >= 5) {
+              setShowDebugOverlay((prev) => !prev);
+              setDebugTapCount(0);
+              return;
+            }
+            setDebugTapCount(next);
+          }}
+        >
+          {state.gameType} Online
+        </button>
         {state.status === 'PLAYING' ? (
           gameType === 'CALLBREAK' ? (
             <div className="text-[10px] font-black uppercase text-yellow-300">Turn</div>
@@ -473,6 +496,17 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       )}
 
       {result && <div className="mt-2 text-center text-sm font-black text-green-400">{result}</div>}
+
+      {showDebugOverlay && (
+        <div className="absolute left-2 bottom-2 z-[300] bg-black/85 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-w-[95vw]">
+          <div>match: {String(syncDebug.matchId || 'NA')}</div>
+          <div>seat: {syncDebug.seat} rev: {syncDebug.revision} evt: {syncDebug.lastEventId}</div>
+          <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
+          <div>sub: {String(syncDebug.subscriptionId || 'NA')}</div>
+          <div>pump: {String(syncDebug.eventPumpRunning)} inflight: {String(syncDebug.eventPumpInFlight)} empty: {syncDebug.emptyEventLoops}</div>
+          <div className="text-[9px] text-cyan-400/80">tap title 5x to hide</div>
+        </div>
+      )}
     </div>
   );
 }
