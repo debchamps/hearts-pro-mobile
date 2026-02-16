@@ -84,10 +84,26 @@ function buildChangedState(before, after) {
 }
 
 var EventDispatcher = {
+  refreshFromStorage: function(matchId) {
+    var local = cache.events[matchId];
+    var loaded = titleDataGet('events_' + matchId);
+    if (!loaded) return local || null;
+    if (!local) {
+      cache.events[matchId] = loaded;
+      return loaded;
+    }
+    var localLatest = local.events && local.events.length ? local.events[local.events.length - 1].eventId : 0;
+    var loadedLatest = loaded.events && loaded.events.length ? loaded.events[loaded.events.length - 1].eventId : 0;
+    if (loadedLatest > localLatest || (loaded.nextEventId || 0) > (local.nextEventId || 0)) {
+      cache.events[matchId] = loaded;
+      return loaded;
+    }
+    return local;
+  },
   getStream: function(matchId) {
-    if (!cache.events[matchId]) {
-      var loaded = titleDataGet('events_' + matchId);
-      cache.events[matchId] = loaded || { nextEventId: 1, events: [] };
+    var refreshed = EventDispatcher.refreshFromStorage(matchId);
+    if (!refreshed) {
+      cache.events[matchId] = { nextEventId: 1, events: [] };
     }
     return cache.events[matchId];
   },
