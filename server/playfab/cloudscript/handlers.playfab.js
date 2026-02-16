@@ -350,6 +350,19 @@ function startMatchIfReady(match) {
   return true;
 }
 
+function ensureMatchStartedAndPublished(match, context) {
+  if (match.status !== 'WAITING') return false;
+  var started = startMatchIfReady(match);
+  if (!started) return false;
+  bump(match);
+  EventDispatcher.emit(match, 'MATCH_STARTED', -1, match);
+  EventDispatcher.emit(match, 'CARDS_DISTRIBUTED', -1, match);
+  EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, match);
+  runServerTurnChain(match, match.revision);
+  saveMatch(match, context);
+  return true;
+}
+
 function isSeatBotOrDisconnected(match, seat) {
   var p = match.players[seat];
   return !!(p && (p.isBot || p.disconnected));
@@ -1318,11 +1331,13 @@ handlers.submitBid = function(args, context) {
 
 handlers.getSnapshot = function(args, context) {
   var match = getMatch(args.matchId, context);
+  ensureMatchStartedAndPublished(match, context);
   return deltaFor(match, match);
 };
 
 handlers.getState = function(args, context) {
   var match = getMatch(args.matchId, context);
+  ensureMatchStartedAndPublished(match, context);
   if (args && typeof args.sinceRevision === 'number' && args.sinceRevision >= match.revision) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
@@ -1331,6 +1346,7 @@ handlers.getState = function(args, context) {
 
 handlers.subscribeToMatch = function(args, context) {
   var match = getMatch(args.matchId, context);
+  ensureMatchStartedAndPublished(match, context);
   var playerId = getCurrentPlayerId(context);
   var requestedSub = args && args.subscriptionId;
   var subscriptionId = (requestedSub && SubscriptionManager.isActive(match.matchId, requestedSub))

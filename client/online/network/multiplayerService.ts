@@ -14,6 +14,7 @@ export class MultiplayerService {
   private eventPumpTimer: number | null = null;
   private eventPumpRunning = false;
   private eventPumpInFlight = false;
+  private emptyEventLoops = 0;
 
   private static readonly EVENT_PUMP_FAST_MS = 35;
   private static readonly EVENT_PUMP_IDLE_MS = 110;
@@ -71,6 +72,7 @@ export class MultiplayerService {
     if (!this.matchId) throw new Error('No active match');
     const api = await this.ensureApi();
     this.listeners.add(listener);
+    this.emptyEventLoops = 0;
     const res = await api.subscribeToMatch({
       matchId: this.matchId,
       sinceEventId: this.lastEventId,
@@ -128,6 +130,22 @@ export class MultiplayerService {
         this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
         const events = res.events || [];
         this.applyEvents(events);
+        if (events.length === 0) {
+          this.emptyEventLoops += 1;
+          if (
+            this.emptyEventLoops >= 10 &&
+            this.state &&
+            (this.state.status === 'WAITING' || this.state.phase === 'BIDDING' || this.state.phase === 'PASSING')
+          ) {
+            this.emptyEventLoops = 0;
+            try {
+              await this.resyncSnapshot();
+              this.notify([]);
+            } catch {}
+          }
+        } else {
+          this.emptyEventLoops = 0;
+        }
         if (this.eventPumpRunning) {
           this.eventPumpTimer = window.setTimeout(tick, events.length > 0 ? MultiplayerService.EVENT_PUMP_FAST_MS : MultiplayerService.EVENT_PUMP_IDLE_MS);
         }
@@ -175,7 +193,14 @@ export class MultiplayerService {
         });
         this.subscriptionId = res.subscriptionId;
         this.lastEventId = Math.max(this.lastEventId, res.latestEventId || 0);
-        this.applyEvents(res.events || []);
+        const events = res.events || [];
+        this.applyEvents(events);
+        if (events.length === 0 && this.state && this.state.status === 'WAITING') {
+          try {
+            await this.resyncSnapshot();
+            this.notify([]);
+          } catch {}
+        }
       } catch {
       } finally {
         this.eventPumpInFlight = false;
