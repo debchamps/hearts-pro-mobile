@@ -1290,39 +1290,85 @@ handlers.findMatch = function(args, context) {
     });
   }
   if (waiting && waiting.matchId && waiting.ownerPlayFabId && waiting.ownerPlayFabId !== playerId) {
-    var existing = getMatch(waiting.matchId, context);
-    var beforeExisting = cloneState(existing);
-    existing.players[2].playFabId = playerId;
-    existing.players[2].name = args.playerName || 'OPPONENT';
-    existing.players[2].isBot = false;
-    existing.players[2].rankBadge = 'Rookie';
-    existing.players[2].pingMs = 57;
-    setJoinMarker(existing.matchId, {
-      seat2PlayFabId: playerId,
-      seat2Name: existing.players[2].name || args.playerName || 'OPPONENT',
-      at: Date.now()
-    });
-    ensureTracking(existing);
-    existing.autoMoveOnTimeoutBySeat[2] = args.autoMoveOnTimeout !== false;
-    var started = startMatchIfReady(existing);
-    bump(existing);
-    if (started) {
-      EventDispatcher.emit(existing, 'MATCH_STARTED', -1, { status: existing.status, phase: existing.phase, turnIndex: existing.turnIndex });
-      EventDispatcher.emit(existing, 'CARDS_DISTRIBUTED', -1, { seed: existing.seed, deck: existing.deck, hands: existing.hands });
+    // Retry getMatch with backoff to handle TitleData eventual consistency.
+    var existing = null;
+    var getMatchRetries = 3;
+    var getMatchDelay = 80;
+    while (getMatchRetries > 0) {
+      try {
+        existing = getMatch(waiting.matchId, context);
+        break;
+      } catch (e) {
+        getMatchRetries--;
+        if (getMatchRetries > 0) {
+          appendSyncDebug(waiting.matchId, 'findMatch.getMatchRetry', {
+            playerId: playerId,
+            retriesLeft: getMatchRetries,
+            delayMs: getMatchDelay,
+            error: String(e)
+          });
+          var spinEnd = Date.now() + getMatchDelay;
+          while (Date.now() < spinEnd) { /* spin-wait for TitleData replication */ }
+          getMatchDelay *= 2;
+        } else {
+          // All retries exhausted. Try the embedded snapshot from the waiting marker.
+          if (waiting.snapshot && waiting.snapshot.matchId === waiting.matchId) {
+            appendSyncDebug(waiting.matchId, 'findMatch.usedWaitingSnapshot', {
+              playerId: playerId,
+              snapshotRevision: waiting.snapshot.revision
+            });
+            existing = cloneState(waiting.snapshot);
+            cache.matches[existing.matchId] = existing;
+          } else {
+            // Truly stale — clear marker and fall through to create a fresh match.
+            appendSyncDebug(waiting.matchId, 'findMatch.staleWaitingCleared', {
+              playerId: playerId,
+              waitingMatchId: waiting.matchId,
+              waitingOwner: waiting.ownerPlayFabId,
+              error: String(e)
+            });
+            titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+            existing = null;
+          }
+        }
+      }
     }
-    EventDispatcher.emit(existing, 'TURN_CHANGED', existing.turnIndex, { turnIndex: existing.turnIndex, phase: existing.phase, turnDeadlineMs: existing.turnDeadlineMs });
-    runServerTurnChain(existing, existing.revision);
-    saveMatch(existing, context);
-    appendSyncDebug(existing.matchId, 'findMatch.joinedExisting', {
-      playerId: playerId,
-      seat: 2,
-      revision: existing.revision,
-      status: existing.status,
-      phase: existing.phase,
-      turnIndex: existing.turnIndex
-    });
-    titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
-    return { matchId: existing.matchId, seat: 2, revision: existing.revision, changed: buildChangedState(beforeExisting, existing) };
+
+    if (existing) {
+      var beforeExisting = cloneState(existing);
+      existing.players[2].playFabId = playerId;
+      existing.players[2].name = args.playerName || 'OPPONENT';
+      existing.players[2].isBot = false;
+      existing.players[2].rankBadge = 'Rookie';
+      existing.players[2].pingMs = 57;
+      setJoinMarker(existing.matchId, {
+        seat2PlayFabId: playerId,
+        seat2Name: existing.players[2].name || args.playerName || 'OPPONENT',
+        at: Date.now()
+      });
+      ensureTracking(existing);
+      existing.autoMoveOnTimeoutBySeat[2] = args.autoMoveOnTimeout !== false;
+      var started = startMatchIfReady(existing);
+      bump(existing);
+      if (started) {
+        EventDispatcher.emit(existing, 'MATCH_STARTED', -1, { status: existing.status, phase: existing.phase, turnIndex: existing.turnIndex });
+        EventDispatcher.emit(existing, 'CARDS_DISTRIBUTED', -1, { seed: existing.seed, deck: existing.deck, hands: existing.hands });
+      }
+      EventDispatcher.emit(existing, 'TURN_CHANGED', existing.turnIndex, { turnIndex: existing.turnIndex, phase: existing.phase, turnDeadlineMs: existing.turnDeadlineMs });
+      runServerTurnChain(existing, existing.revision);
+      saveMatch(existing, context);
+      appendSyncDebug(existing.matchId, 'findMatch.joinedExisting', {
+        playerId: playerId,
+        seat: 2,
+        revision: existing.revision,
+        status: existing.status,
+        phase: existing.phase,
+        turnIndex: existing.turnIndex
+      });
+      titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+      return { matchId: existing.matchId, seat: 2, revision: existing.revision, changed: buildChangedState(beforeExisting, existing) };
+    }
+    // existing is null — stale marker was cleared above, fall through to create new match.
   }
 
   if (currentMatchId) {
@@ -1359,11 +1405,14 @@ handlers.findMatch = function(args, context) {
     status: match.status,
     phase: match.phase
   });
+  // Write waiting marker AFTER match data, and embed a snapshot so the joiner
+  // can bootstrap from the marker itself if TitleData replication is slow.
   titleDataSet(waitKey, {
     matchId: match.matchId,
     ownerPlayFabId: playerId,
     gameType: gameType,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    snapshot: match
   });
   return { matchId: match.matchId, seat: 0 };
 };

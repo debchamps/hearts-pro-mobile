@@ -210,18 +210,23 @@ export function findMatch(args) {
   const waiting = stateStore.lobbies.get(queueKey);
 
   if (waiting && waiting.ownerPlayFabId !== playerId) {
-    const existing = assertMatch(waiting.matchId);
-    existing.players[2] = {
-      ...existing.players[2],
-      playFabId: playerId,
-      name: args.playerName || 'OPPONENT',
-      isBot: false,
-      rankBadge: 'Rookie',
-      pingMs: 57,
-    };
-    bump(existing);
-    stateStore.lobbies.delete(queueKey);
-    return { matchId: existing.matchId, seat: 2 };
+    const existing = stateStore.matches.get(waiting.matchId);
+    if (!existing) {
+      // Stale waiting marker — clear and fall through to create a new match.
+      stateStore.lobbies.delete(queueKey);
+    } else {
+      existing.players[2] = {
+        ...existing.players[2],
+        playFabId: playerId,
+        name: args.playerName || 'OPPONENT',
+        isBot: false,
+        rankBadge: 'Rookie',
+        pingMs: 57,
+      };
+      bump(existing);
+      stateStore.lobbies.delete(queueKey);
+      return { matchId: existing.matchId, seat: 2 };
+    }
   }
 
   const match = newMatch(gameType, args.playerName, playerId);

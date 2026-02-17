@@ -37,10 +37,23 @@ export class MultiplayerService {
     this.gameType = gameType;
     this.playerName = playerName || 'YOU';
     this.autoMoveOnTimeout = options?.autoMoveOnTimeout !== false;
-    const created = api.findMatch
-      ? await api.findMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout })
-      : await api.createMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout });
 
+    const callFindOrCreate = async (retries = 3): Promise<{ matchId: string; seat: number }> => {
+      try {
+        return api.findMatch
+          ? await api.findMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout })
+          : await api.createMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout });
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (msg.includes('Match not found') && retries > 0) {
+          await new Promise((r) => setTimeout(r, 400 * (4 - retries)));
+          return callFindOrCreate(retries - 1);
+        }
+        throw e;
+      }
+    };
+
+    const created = await callFindOrCreate();
     this.matchId = created.matchId;
     this.seat = created.seat;
     const delta = await api.getSnapshot({ matchId: created.matchId, seat: created.seat });
