@@ -1178,7 +1178,7 @@ function saveMatch(match, context) {
   });
 }
 
-function getMatch(matchId, context) {
+function getMatchOnce(matchId, context) {
   var cached = cache.matches[matchId] || null;
   var pid = getCurrentPlayerId(context);
   var newest = cached;
@@ -1219,17 +1219,44 @@ function getMatch(matchId, context) {
   if (newest) {
     applyJoinMarker(newest);
     cache.matches[matchId] = newest;
-    appendSyncDebug(matchId, 'getMatch.selected', {
-      playerId: pid,
-      selectedRevision: newest.revision || 0,
-      selectedStatus: newest.status,
-      selectedPhase: newest.phase,
-      selectedTurnIndex: newest.turnIndex,
-      selectedSeat2: newest.players && newest.players[2] ? newest.players[2].playFabId : null
-    });
     return newest;
   }
-  appendSyncDebug(matchId, 'getMatch.miss', { playerId: pid });
+  return null;
+}
+
+function getMatch(matchId, context) {
+  // First try — immediate
+  var result = getMatchOnce(matchId, context);
+  if (result) {
+    appendSyncDebug(matchId, 'getMatch.selected', {
+      playerId: getCurrentPlayerId(context),
+      selectedRevision: result.revision || 0,
+      selectedStatus: result.status,
+      selectedPhase: result.phase
+    });
+    return result;
+  }
+
+  // Retry with spin-waits — TitleData eventual consistency can take up to 200ms
+  var retries = 3;
+  var delayMs = 100;
+  while (retries > 0) {
+    var spinEnd = Date.now() + delayMs;
+    while (Date.now() < spinEnd) { /* spin-wait for TitleData replication */ }
+    result = getMatchOnce(matchId, context);
+    if (result) {
+      appendSyncDebug(matchId, 'getMatch.retryHit', {
+        playerId: getCurrentPlayerId(context),
+        retriesUsed: 4 - retries,
+        revision: result.revision || 0
+      });
+      return result;
+    }
+    retries--;
+    delayMs *= 2;
+  }
+
+  appendSyncDebug(matchId, 'getMatch.miss', { playerId: getCurrentPlayerId(context) });
   throw new Error('Match not found');
 }
 
@@ -1384,7 +1411,7 @@ handlers.findMatch = function(args, context) {
         turnIndex: existing.turnIndex
       });
       titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
-      return { matchId: existing.matchId, seat: 2, revision: existing.revision, changed: buildChangedState(beforeExisting, existing) };
+      return { matchId: existing.matchId, seat: 2, revision: existing.revision, changed: buildChangedState(beforeExisting, existing), snapshot: deltaFor(existing, existing) };
     }
     // existing is null — stale marker was cleared above, fall through to create new match.
   }
@@ -1432,7 +1459,7 @@ handlers.findMatch = function(args, context) {
     createdAt: Date.now(),
     snapshot: match
   });
-  return { matchId: match.matchId, seat: 0 };
+  return { matchId: match.matchId, seat: 0, snapshot: deltaFor(match, match) };
 };
 
 handlers.createMatch = function(args, context) {
