@@ -1,7 +1,7 @@
 import { GameType } from '../../../types';
 import { localOnlineApi } from '../core/serverEmulator';
 import { OnlineApi } from '../types';
-import { loginPlayFabWithProvider, PlayFabAuthProvider } from './playfabAuth';
+import { clearSession, loginPlayFabWithProvider, PlayFabAuthProvider } from './playfabAuth';
 import { getGoogleIdToken } from './googleAuth';
 import { getDebugAuthMode } from './authMode';
 
@@ -9,25 +9,44 @@ interface PlayFabOptions {
   titleId: string;
   sessionTicket: string;
   cloudScriptFunctionPrefix?: string;
+  refreshSession?: () => Promise<string>;
 }
 
 class PlayFabCloudScriptApi implements OnlineApi {
-  constructor(private readonly options: PlayFabOptions) {}
+  private sessionTicket: string;
+
+  constructor(private readonly options: PlayFabOptions) {
+    this.sessionTicket = options.sessionTicket;
+  }
 
   private async call<T>(functionName: string, payload: unknown): Promise<T> {
-    const url = `https://${this.options.titleId}.playfabapi.com/Client/ExecuteCloudScript`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Authorization': this.options.sessionTicket,
-      },
-      body: JSON.stringify({
-        FunctionName: functionName,
-        FunctionParameter: payload,
-        GeneratePlayStreamEvent: false,
-      }),
-    });
+    const attempt = async (ticket: string): Promise<Response> => {
+      const url = `https://${this.options.titleId}.playfabapi.com/Client/ExecuteCloudScript`;
+      return fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Authorization': ticket,
+        },
+        body: JSON.stringify({
+          FunctionName: functionName,
+          FunctionParameter: payload,
+          GeneratePlayStreamEvent: false,
+        }),
+      });
+    };
+
+    let response = await attempt(this.sessionTicket);
+
+    // On 401, clear stale session and re-authenticate once
+    if (response.status === 401 && this.options.refreshSession) {
+      try {
+        this.sessionTicket = await this.options.refreshSession();
+        response = await attempt(this.sessionTicket);
+      } catch {
+        // Re-auth failed — throw the original 401
+      }
+    }
 
     if (!response.ok) {
       const text = await response.text();
@@ -136,12 +155,20 @@ export async function createOnlineApiAsync(): Promise<OnlineApi> {
     return localOnlineApi;
   }
 
+  const refreshSession = async (): Promise<string> => {
+    clearSession();
+    const freshToken = provider === 'GOOGLE' && !authToken ? await getGoogleIdToken() : authToken;
+    const freshSession = await loginPlayFabWithProvider(titleId, provider, freshToken, customId);
+    return freshSession.sessionTicket;
+  };
+
   try {
     const resolvedToken = provider === 'GOOGLE' && !authToken ? await getGoogleIdToken() : authToken;
     const session = await loginPlayFabWithProvider(titleId, provider, resolvedToken, customId);
     return new PlayFabCloudScriptApi({
       titleId,
       sessionTicket: session.sessionTicket,
+      refreshSession,
     });
   } catch {
     return localOnlineApi;
