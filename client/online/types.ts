@@ -50,6 +50,8 @@ export interface MultiplayerGameState {
   serverTimeMs: number;
   lastCompletedTrick?: LastCompletedTrick;
   dealerIndex?: number;
+  /** Server may send tricksWon instead of trickWins — normalised in applyDelta */
+  tricksWon?: Record<number, number>;
 }
 
 export interface GameStateDelta {

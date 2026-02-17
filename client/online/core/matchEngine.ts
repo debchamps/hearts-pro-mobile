@@ -156,7 +156,8 @@ export function submitMove(state: MultiplayerGameState, seat: number, cardId: st
 
 export function submitPass(state: MultiplayerGameState, seat: number, cardIds: string[], timeoutMs: number): MultiplayerGameState {
   if (state.phase !== 'PASSING') throw new Error('Not in passing phase');
-  // Passing is simultaneous — any player can submit their pass at any time
+  // Passing is turn-based on the server: each seat passes when it's their turn
+  if (seat !== state.turnIndex) throw new Error('Not your turn');
   const existingSelections = state.passingSelections || { 0: [], 1: [], 2: [], 3: [] };
   if ((existingSelections[seat] || []).length === 3) throw new Error('Already passed');
   const hand = state.hands[seat] || [];
@@ -166,9 +167,14 @@ export function submitPass(state: MultiplayerGameState, seat: number, cardIds: s
   const selections = { ...(state.passingSelections || { 0: [], 1: [], 2: [], 3: [] }) };
   selections[seat] = cardIds;
 
+  // Advance turnIndex to next seat
+  const nextTurn = (seat + 1) % 4;
+
   const next: MultiplayerGameState = {
     ...state,
     passingSelections: selections,
+    turnIndex: nextTurn,
+    turnDeadlineMs: Date.now() + timeoutMs,
     revision: state.revision + 1,
     serverTimeMs: Date.now(),
   };
@@ -242,18 +248,13 @@ export function timeoutMove(state: MultiplayerGameState, timeoutMs: number): Mul
     return submitBid(state, state.turnIndex, defaultBid, timeoutMs);
   }
 
-  // Handle passing timeout — auto-select 3 highest cards for ALL players who haven't passed yet
+  // Handle passing timeout — auto-select 3 highest cards for current turn player
   if (state.phase === 'PASSING') {
-    let current = state;
-    const selections = current.passingSelections || { 0: [], 1: [], 2: [], 3: [] };
-    for (let s = 0; s < 4; s++) {
-      if ((selections[s] || []).length === 3) continue;
-      const hand = current.hands[s] || [];
-      const sorted = [...hand].sort((a, b) => b.value - a.value);
-      const autoIds = sorted.slice(0, 3).map((c) => c.id);
-      current = submitPass(current, s, autoIds, timeoutMs);
-    }
-    return current;
+    const seat = state.turnIndex;
+    const hand = state.hands[seat] || [];
+    const sorted = [...hand].sort((a, b) => b.value - a.value);
+    const autoIds = sorted.slice(0, 3).map((c) => c.id);
+    return submitPass(state, seat, autoIds, timeoutMs);
   }
 
   const rules = getRules(state.gameType);
@@ -287,13 +288,19 @@ export function createDelta(prev: MultiplayerGameState | null, next: Multiplayer
 }
 
 export function applyDelta(base: MultiplayerGameState | null, delta: GameStateDelta): MultiplayerGameState {
-  if (!base) return delta.changed as MultiplayerGameState;
-  return {
-    ...base,
-    ...delta.changed,
-    revision: delta.revision,
-    serverTimeMs: delta.serverTimeMs,
-  };
+  const merged = base
+    ? { ...base, ...delta.changed, revision: delta.revision, serverTimeMs: delta.serverTimeMs }
+    : (delta.changed as MultiplayerGameState);
+
+  // Normalise server field: tricksWon → trickWins (server uses tricksWon, client uses trickWins)
+  if ((merged as any).tricksWon && !merged.trickWins) {
+    merged.trickWins = (merged as any).tricksWon;
+  } else if ((merged as any).tricksWon) {
+    // Merge tricksWon into trickWins, preferring the latest values
+    merged.trickWins = { ...merged.trickWins, ...(merged as any).tricksWon };
+  }
+
+  return merged;
 }
 
 export function resolveRewards(state: MultiplayerGameState): MatchResult {

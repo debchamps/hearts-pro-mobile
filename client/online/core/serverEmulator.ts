@@ -133,14 +133,17 @@ async function runBotTurnChain(matchId: string) {
 }
 
 async function runBotPassingPhase(matchId: string) {
-  const store = matches.get(matchId);
-  if (!store || store.state.phase !== 'PASSING') return;
+  // Passing is turn-based on the server: each seat passes in order
+  for (;;) {
+    const store = matches.get(matchId);
+    if (!store || store.state.phase !== 'PASSING') return;
 
-  // Bot passing is simultaneous — all bots pass their cards at once
-  for (let seat = 0; seat < 4; seat++) {
+    const seat = store.state.turnIndex;
     const player = store.state.players[seat];
+    if (!player || !player.isBot) return; // Human's turn to pass — exit
+
     const selections = store.state.passingSelections || { 0: [], 1: [], 2: [], 3: [] };
-    if (!player.isBot || (selections[seat] || []).length === 3) continue;
+    if ((selections[seat] || []).length === 3) return; // Already passed
 
     // Bot auto-selects 3 highest value cards to pass
     const hand = store.state.hands[seat] || [];
@@ -172,10 +175,12 @@ async function runBotPassingPhase(matchId: string) {
       });
       return; // Done with passing
     } else {
-      // Still waiting for more players to pass
-      emitEvent(latest, 'CARD_PLAYED', seat, {
+      // Still waiting for more players to pass — emit turn change
+      emitEvent(latest, 'TURN_CHANGED', latest.state.turnIndex, {
         phase: latest.state.phase,
         passingSelections: latest.state.passingSelections,
+        turnIndex: latest.state.turnIndex,
+        turnDeadlineMs: latest.state.turnDeadlineMs,
       });
     }
   }

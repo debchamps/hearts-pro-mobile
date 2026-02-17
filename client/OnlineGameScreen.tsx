@@ -176,7 +176,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     if (!state) return [];
     const hands = (state as any).hands || {};
     const scores = (state as any).scores || {};
-    const trickWins = (state as any).trickWins || (state as any).tricksWon || {};
+    const trickWins = (state as any).trickWins || (state as any).tricksWon || { 0: 0, 1: 0, 2: 0, 3: 0 };
     const bids = (state as any).bids || {};
     const players = Array.isArray((state as any).players) ? (state as any).players : [];
 
@@ -250,7 +250,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const onDragEnd = (card: any) => {
     if (!dragInfo) return;
     const diff = dragInfo.startY - dragInfo.currentY;
-    if (phase === 'PASSING') {
+    if (phase === 'PASSING' && state?.turnIndex === selfSeat) {
       togglePassCard(card.id);
     } else if (diff > 50 || Math.abs(diff) < 10) {
       submit(card.id);
@@ -399,7 +399,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const passingDirection = (state as any).passingDirection || 'LEFT';
   const bids = (state as any).bids || {};
   const scores = (state as any).scores || {};
-  const trickWins = (state as any).trickWins || {};
+  const trickWins = (state as any).trickWins || (state as any).tricksWon || { 0: 0, 1: 0, 2: 0, 3: 0 };
 
   return (
     <div className="h-screen w-full flex flex-col select-none relative overflow-hidden text-white" onMouseMove={onDragMove} onTouchMove={onDragMove}>
@@ -495,15 +495,29 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
             <div className="flex flex-col items-center gap-3 animate-fadeIn">
               <div className="text-3xl">🔄</div>
               <span className="text-xs text-yellow-300 font-black uppercase tracking-[0.2em]">
-                Pass 3 cards {passingDirection}
+                {state.turnIndex === selfSeat ? `Pass 3 cards ${passingDirection}` : 'Waiting for other players to pass...'}
               </span>
-              <div className="flex gap-2 mt-1">
-                {[0, 1, 2].map(i => (
-                  <div key={i} className={`w-10 h-14 rounded-lg border-2 flex items-center justify-center ${selectedPassIds[i] ? 'border-yellow-400 bg-yellow-400/20' : 'border-white/20 bg-white/5'}`}>
-                    <span className="text-white/30 text-lg font-black">{selectedPassIds[i] ? '✓' : '?'}</span>
-                  </div>
-                ))}
-              </div>
+              {state.turnIndex === selfSeat ? (
+                <div className="flex gap-2 mt-1">
+                  {[0, 1, 2].map(i => (
+                    <div key={i} className={`w-10 h-14 rounded-lg border-2 flex items-center justify-center ${selectedPassIds[i] ? 'border-yellow-400 bg-yellow-400/20' : 'border-white/20 bg-white/5'}`}>
+                      <span className="text-white/30 text-lg font-black">{selectedPassIds[i] ? '✓' : '?'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex gap-2 mt-1">
+                  {[0, 1, 2, 3].map(s => {
+                    const sel = ((state as any).passingSelections || {})[s] || [];
+                    const hasPassed = sel.length === 3;
+                    return (
+                      <div key={s} className={`w-8 h-8 rounded-full flex items-center justify-center border-2 text-xs font-black ${hasPassed ? 'border-green-400 bg-green-400/20 text-green-400' : 'border-white/20 bg-white/5 text-white/30'}`}>
+                        {hasPassed ? '✓' : '⏳'}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : phase === 'BIDDING' ? (
             <div className="flex flex-col items-center gap-2 animate-fadeIn">
@@ -565,7 +579,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         <div className="relative w-full flex-1">
           {handLayout.map((item, idx, arr) => {
             const isDragging = dragInfo?.id === item.card.id;
-            const isSelectedForPass = phase === 'PASSING' && selectedPassIds.includes(item.card.id);
+            const isSelectedForPass = phase === 'PASSING' && state?.turnIndex === selfSeat && selectedPassIds.includes(item.card.id);
             const isInactive = phase === 'PLAYING' && state?.turnIndex === selfSeat && state.status === 'PLAYING' && !playableIds.has(item.card.id);
             return (
               <div
@@ -574,7 +588,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
                 onTouchStart={(e) => onDragStart(e, item.card.id)}
                 onMouseUp={() => onDragEnd(item.card)}
                 onTouchEnd={() => onDragEnd(item.card)}
-                className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[600]' : ''} ${(phase === 'PLAYING' && state?.turnIndex === selfSeat) || phase === 'PASSING' ? 'active:-translate-y-2' : 'opacity-80'}`}
+                className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[600]' : ''} ${(phase === 'PLAYING' && state?.turnIndex === selfSeat) || (phase === 'PASSING' && state?.turnIndex === selfSeat) ? 'active:-translate-y-2' : 'opacity-80'}`}
                 style={{
                   transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.35 + (isDragging ? dragInfo.currentY - dragInfo.startY : (isSelectedForPass ? -100 : 0))}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg) scale(${isDragging ? 1.12 : 1})`,
                   zIndex: isDragging ? 600 : 100 + idx,
@@ -592,8 +606,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         </div>
       </div>
 
-      {/* PASSING CONFIRM BUTTON */}
-      {phase === 'PASSING' && (
+      {/* PASSING CONFIRM BUTTON — only when it's your turn to pass */}
+      {phase === 'PASSING' && state.turnIndex === selfSeat && (
         <div className="absolute bottom-[calc(max(1rem,var(--safe-bottom))+8px)] left-1/2 -translate-x-1/2 z-[150] animate-fadeIn">
           <button
             onClick={confirmPass}

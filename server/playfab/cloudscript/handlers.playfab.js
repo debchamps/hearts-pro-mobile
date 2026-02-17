@@ -333,6 +333,8 @@ function newMatch(gameType, playerName, playerId) {
     leadSuit: null,
     scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
     tricksWon: { 0: 0, 1: 0, 2: 0, 3: 0 },
+    trickWins: { 0: 0, 1: 0, 2: 0, 3: 0 },
+    bids: { 0: null, 1: null, 2: null, 3: null },
     roundNumber: 1,
     status: 'WAITING',
     phase: 'WAITING',
@@ -352,6 +354,9 @@ function ensureTracking(match) {
   if (!match.playedCardIds) match.playedCardIds = {};
   if (match.heartsBroken === undefined || match.heartsBroken === null) match.heartsBroken = false;
   if (!match.tricksWon) match.tricksWon = { 0: 0, 1: 0, 2: 0, 3: 0 };
+  // Keep trickWins in sync as client-side alias
+  match.trickWins = match.tricksWon;
+  if (!match.bids) match.bids = { 0: null, 1: null, 2: null, 3: null };
   if (!match.autoMoveOnTimeoutBySeat) match.autoMoveOnTimeoutBySeat = { 0: true, 1: true, 2: true, 3: true };
   if (match.autoMoveOnTimeoutBySeat[0] === undefined) match.autoMoveOnTimeoutBySeat[0] = true;
   if (match.autoMoveOnTimeoutBySeat[1] === undefined) match.autoMoveOnTimeoutBySeat[1] = true;
@@ -444,10 +449,13 @@ function startMatchIfReady(match) {
   match.passingSelections = { 0: [], 1: [], 2: [], 3: [] };
   match.bids = { 0: null, 1: null, 2: null, 3: null };
   match.tricksWon = { 0: 0, 1: 0, 2: 0, 3: 0 };
+  match.trickWins = match.tricksWon; // alias for client compatibility
   if (match.gameType === 'HEARTS') {
     match.phase = 'PASSING';
   } else if (match.gameType === 'CALLBREAK' || match.gameType === 'SPADES') {
     match.phase = 'BIDDING';
+    // Bidding starts at dealer+1; dealer is seat 0
+    match.turnIndex = 1;
   } else {
     match.phase = 'PLAYING';
   }
@@ -496,8 +504,12 @@ function finalizePassing(match) {
     match.hands[seat] = hand.filter(function(c) { return sel.indexOf(c.id) < 0; });
   }
 
+  var dir = match.passingDirection || 'LEFT';
   for (seat = 0; seat < 4; seat++) {
-    var target = (seat + 1) % 4; // pass left
+    var target;
+    if (dir === 'LEFT') target = (seat + 1) % 4;
+    else if (dir === 'RIGHT') target = (seat + 3) % 4;
+    else target = (seat + 2) % 4; // ACROSS
     match.hands[target] = (match.hands[target] || []).concat(passes[seat] || []);
   }
 
@@ -603,7 +615,8 @@ function finalizeBidding(match) {
     if (match.bids[i] === null || match.bids[i] === undefined) return false;
   }
   match.phase = 'PLAYING';
-  match.turnIndex = 0;
+  // Play starts from dealer+1 (dealer is seat 0)
+  match.turnIndex = 1;
   match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
   return true;
 }
@@ -1022,6 +1035,9 @@ function applyMove(match, seat, cardId, allowFallback) {
   }
   match.scores[winner] = (match.scores[winner] || 0) + trickPoints;
   match.tricksWon[winner] = (match.tricksWon[winner] || 0) + 1;
+  // Keep trickWins in sync as client-side alias
+  if (!match.trickWins) match.trickWins = { 0: 0, 1: 0, 2: 0, 3: 0 };
+  match.trickWins[winner] = match.tricksWon[winner];
   match.currentTrick = [];
   match.lastCompletedTrick = {
     trick: completedTrick,
@@ -1100,12 +1116,13 @@ function runServerTurnChain(match, beforeRevision) {
         lastCompletedTrick: match.lastCompletedTrick,
         scores: match.scores,
         tricksWon: match.tricksWon,
+        trickWins: match.tricksWon,
         turnIndex: match.turnIndex
       });
     }
     if (match.status === 'COMPLETED') {
-      EventDispatcher.emit(match, 'ROUND_COMPLETED', turnSeat, { scores: match.scores, tricksWon: match.tricksWon });
-      EventDispatcher.emit(match, 'MATCH_COMPLETED', turnSeat, { status: match.status, scores: match.scores, tricksWon: match.tricksWon });
+      EventDispatcher.emit(match, 'ROUND_COMPLETED', turnSeat, { scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
+      EventDispatcher.emit(match, 'MATCH_COMPLETED', turnSeat, { status: match.status, scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
     } else {
       EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
     }
@@ -1137,6 +1154,7 @@ function saveMatchForPlayer(playFabId, match) {
 }
 
 function saveMatch(match, context) {
+  ensureTracking(match);
   cache.matches[match.matchId] = match;
   var ownerId = match.ownerPlayFabId || getCurrentPlayerId(context);
   match.ownerPlayFabId = ownerId;
@@ -1466,12 +1484,13 @@ handlers.submitMove = function(args, context) {
     EventDispatcher.emit(match, 'TRICK_COMPLETED', args.seat, {
       lastCompletedTrick: match.lastCompletedTrick,
       scores: match.scores,
-      tricksWon: match.tricksWon
+      tricksWon: match.tricksWon,
+      trickWins: match.tricksWon
     });
   }
   if (match.status === 'COMPLETED') {
-    EventDispatcher.emit(match, 'ROUND_COMPLETED', args.seat, { scores: match.scores, tricksWon: match.tricksWon });
-    EventDispatcher.emit(match, 'MATCH_COMPLETED', args.seat, { status: match.status, scores: match.scores });
+    EventDispatcher.emit(match, 'ROUND_COMPLETED', args.seat, { scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
+    EventDispatcher.emit(match, 'MATCH_COMPLETED', args.seat, { status: match.status, scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
   } else {
     EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
   }
@@ -1664,12 +1683,13 @@ handlers.timeoutMove = function(args, context) {
       EventDispatcher.emit(match, 'TRICK_COMPLETED', turnSeat, {
         lastCompletedTrick: match.lastCompletedTrick,
         scores: match.scores,
-        tricksWon: match.tricksWon
+        tricksWon: match.tricksWon,
+        trickWins: match.tricksWon
       });
     }
     if (match.status === 'COMPLETED') {
-      EventDispatcher.emit(match, 'ROUND_COMPLETED', turnSeat, { scores: match.scores, tricksWon: match.tricksWon });
-      EventDispatcher.emit(match, 'MATCH_COMPLETED', turnSeat, { status: match.status, scores: match.scores });
+      EventDispatcher.emit(match, 'ROUND_COMPLETED', turnSeat, { scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
+      EventDispatcher.emit(match, 'MATCH_COMPLETED', turnSeat, { status: match.status, scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
     } else {
       EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
     }
@@ -1729,7 +1749,7 @@ handlers.endMatch = function(args, context) {
   var before = cloneState(match);
   match.status = 'COMPLETED';
   bump(match);
-  EventDispatcher.emit(match, 'MATCH_COMPLETED', -1, { status: match.status, scores: match.scores, tricksWon: match.tricksWon });
+  EventDispatcher.emit(match, 'MATCH_COMPLETED', -1, { status: match.status, scores: match.scores, tricksWon: match.tricksWon, trickWins: match.tricksWon });
 
   var standings = [0, 1, 2, 3]
     .map(function(seat) { return { seat: seat, score: match.scores[seat] || 0 }; })
