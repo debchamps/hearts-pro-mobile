@@ -135,6 +135,7 @@ export function createOnlineApi(): OnlineApi {
   const sessionTicket = (import.meta as any).env?.VITE_PLAYFAB_SESSION_TICKET;
 
   if (!titleId || !sessionTicket) {
+    console.warn('[OnlineApi:sync] No session ticket, using async path instead. This sync fallback returns local emulator.');
     return localOnlineApi;
   }
 
@@ -146,12 +147,13 @@ export function createOnlineApi(): OnlineApi {
 
 export async function createOnlineApiAsync(): Promise<OnlineApi> {
   const titleId = (import.meta as any).env?.VITE_PLAYFAB_TITLE_ID || 'EF824';
-  const envProvider = ((import.meta as any).env?.VITE_PLAYFAB_AUTH_PROVIDER || 'GOOGLE') as PlayFabAuthProvider;
+  const envProvider = ((import.meta as any).env?.VITE_PLAYFAB_AUTH_PROVIDER || 'CUSTOM') as PlayFabAuthProvider;
   const provider = (getDebugAuthMode() || envProvider) as PlayFabAuthProvider;
   const authToken = (import.meta as any).env?.VITE_PLAYFAB_AUTH_TOKEN;
   const customId = (import.meta as any).env?.VITE_PLAYFAB_CUSTOM_ID;
 
   if (!titleId) {
+    console.warn('[OnlineApi] No VITE_PLAYFAB_TITLE_ID set, falling back to local emulator');
     return localOnlineApi;
   }
 
@@ -165,12 +167,14 @@ export async function createOnlineApiAsync(): Promise<OnlineApi> {
   try {
     const resolvedToken = provider === 'GOOGLE' && !authToken ? await getGoogleIdToken() : authToken;
     const session = await loginPlayFabWithProvider(titleId, provider, resolvedToken, customId);
+    console.log('[OnlineApi] Connected to PlayFab server, titleId:', titleId, 'playFabId:', session.playFabId);
     return new PlayFabCloudScriptApi({
       titleId,
       sessionTicket: session.sessionTicket,
       refreshSession,
     });
-  } catch {
+  } catch (e) {
+    console.error('[OnlineApi] PlayFab login failed, falling back to local emulator:', e);
     return localOnlineApi;
   }
 }

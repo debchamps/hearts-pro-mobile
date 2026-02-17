@@ -33,6 +33,16 @@ export function createInitialState(matchId: string, config: MatchConfig): Multip
     hands[seat] = sortCardsBySuitThenRankAsc(deck.slice(seat * 13, seat * 13 + 13));
   }
 
+  const phase = config.gameType === 'HEARTS'
+    ? 'PASSING' as const
+    : (config.gameType === 'SPADES' || config.gameType === 'CALLBREAK')
+      ? 'BIDDING' as const
+      : 'PLAYING' as const;
+
+  // For bidding games, bidding starts at dealer+1; for Hearts passing, turnIndex is irrelevant (all pass simultaneously)
+  const dealerIndex = 0;
+  const initialTurnIndex = phase === 'BIDDING' ? (dealerIndex + 1) % 4 : 0;
+
   return {
     matchId,
     gameType: config.gameType,
@@ -41,7 +51,7 @@ export function createInitialState(matchId: string, config: MatchConfig): Multip
     deck,
     players,
     hands,
-    turnIndex: 0,
+    turnIndex: initialTurnIndex,
     trickLeaderIndex: 0,
     leadSuit: null,
     currentTrick: [],
@@ -50,9 +60,18 @@ export function createInitialState(matchId: string, config: MatchConfig): Multip
     bids: { 0: null, 1: null, 2: null, 3: null },
     roundNumber: 1,
     status: 'PLAYING',
+    phase,
+    passingSelections: { 0: [], 1: [], 2: [], 3: [] },
+    passingDirection: getPassingDirection(1),
     turnDeadlineMs: Date.now() + config.timeoutMs,
+    dealerIndex,
     serverTimeMs: Date.now(),
   };
+}
+
+function getPassingDirection(roundNumber: number): 'LEFT' | 'RIGHT' | 'ACROSS' | 'NONE' {
+  const cycle = (roundNumber - 1) % 4;
+  return (['LEFT', 'RIGHT', 'ACROSS', 'NONE'] as const)[cycle];
 }
 
 function getSeatTemplate(gameType: GameType): Array<{ playFabId: string; name: string; isBot: boolean; botDifficulty?: 'EASY' | 'MEDIUM' | 'HARD' }> {
@@ -82,6 +101,7 @@ function scoreCard(gameType: GameType, card: Card): number {
 
 export function submitMove(state: MultiplayerGameState, seat: number, cardId: string, timeoutMs: number): MultiplayerGameState {
   if (state.status !== 'PLAYING') throw new Error('Match not active');
+  if (state.phase && state.phase !== 'PLAYING') throw new Error('Round setup in progress');
   if (seat !== state.turnIndex) throw new Error('Not your turn');
 
   const hand = state.hands[seat] || [];
@@ -104,27 +124,137 @@ export function submitMove(state: MultiplayerGameState, seat: number, cardId: st
     return next;
   }
 
+  // Trick is complete — resolve winner and store completed trick for animation
   const rules = getRules(state.gameType);
   const winner = rules.resolveTrickWinner(next.currentTrick, next.leadSuit);
   const trickScore = next.currentTrick.reduce((sum, play) => sum + scoreCard(state.gameType, play.card), 0);
   next.trickWins = { ...next.trickWins, [winner]: (next.trickWins[winner] || 0) + 1 };
   next.scores = { ...next.scores, [winner]: (next.scores[winner] || 0) + trickScore };
+
+  // Store completed trick data before clearing for UI animation
+  next.lastCompletedTrick = {
+    trick: [...next.currentTrick],
+    winner,
+    at: Date.now(),
+  };
+
   next.currentTrick = [];
   next.leadSuit = null;
   next.turnIndex = winner;
   next.trickLeaderIndex = winner;
   next.turnDeadlineMs = Date.now() + timeoutMs;
 
-  if ((next.hands[0] || []).length === 0) {
+  // Check if round is over (all cards played)
+  const allHandsEmpty = [0, 1, 2, 3].every((s) => (next.hands[s] || []).length === 0);
+  if (allHandsEmpty) {
     next.status = 'COMPLETED';
+    next.phase = 'COMPLETED';
   }
 
   return next;
 }
 
+export function submitPass(state: MultiplayerGameState, seat: number, cardIds: string[], timeoutMs: number): MultiplayerGameState {
+  if (state.phase !== 'PASSING') throw new Error('Not in passing phase');
+  // Passing is simultaneous — any player can submit their pass at any time
+  const existingSelections = state.passingSelections || { 0: [], 1: [], 2: [], 3: [] };
+  if ((existingSelections[seat] || []).length === 3) throw new Error('Already passed');
+  const hand = state.hands[seat] || [];
+  const validCards = cardIds.every((id) => hand.some((c) => c.id === id));
+  if (!validCards || cardIds.length !== 3) throw new Error('Must pass exactly 3 cards from your hand');
+
+  const selections = { ...(state.passingSelections || { 0: [], 1: [], 2: [], 3: [] }) };
+  selections[seat] = cardIds;
+
+  const next: MultiplayerGameState = {
+    ...state,
+    passingSelections: selections,
+    revision: state.revision + 1,
+    serverTimeMs: Date.now(),
+  };
+
+  // Check if all players have passed
+  const allPassed = [0, 1, 2, 3].every((s) => (selections[s] || []).length === 3);
+  if (!allPassed) return next;
+
+  // Finalize passing: redistribute cards
+  const newHands: Record<number, Card[]> = {};
+  const passes: Record<number, Card[]> = {};
+  for (let s = 0; s < 4; s++) {
+    const ids = selections[s] || [];
+    passes[s] = ids.map((id) => (state.hands[s] || []).find((c) => c.id === id)!).filter(Boolean);
+    newHands[s] = (state.hands[s] || []).filter((c) => !ids.includes(c.id));
+  }
+
+  const dir = state.passingDirection || 'LEFT';
+  for (let s = 0; s < 4; s++) {
+    const target = dir === 'LEFT' ? (s + 1) % 4 : dir === 'RIGHT' ? (s + 3) % 4 : (s + 2) % 4;
+    newHands[target] = sortCardsBySuitThenRankAsc([...newHands[target], ...passes[s]]);
+  }
+
+  // Find who has 2 of clubs for Hearts
+  let starter = 0;
+  for (let s = 0; s < 4; s++) {
+    if (newHands[s].some((c) => c.id === '2-CLUBS')) { starter = s; break; }
+  }
+
+  return {
+    ...next,
+    hands: newHands,
+    phase: 'PLAYING',
+    passingSelections: { 0: [], 1: [], 2: [], 3: [] },
+    turnIndex: starter,
+    turnDeadlineMs: Date.now() + timeoutMs,
+  };
+}
+
+export function submitBid(state: MultiplayerGameState, seat: number, bid: number, timeoutMs: number): MultiplayerGameState {
+  if (state.phase !== 'BIDDING') throw new Error('Not in bidding phase');
+  if (seat !== state.turnIndex) throw new Error('Not your turn to bid');
+
+  const bids = { ...(state.bids || { 0: null, 1: null, 2: null, 3: null }) };
+  bids[seat] = bid;
+
+  const nextTurn = (seat + 1) % 4;
+  const allBid = [0, 1, 2, 3].every((s) => bids[s] !== null && bids[s] !== undefined);
+
+  // When all bids are in, start playing from dealer+1 (same as offline)
+  const firstPlayerAfterBidding = allBid ? (state.dealerIndex !== undefined ? (state.dealerIndex + 1) % 4 : 0) : nextTurn;
+
+  return {
+    ...state,
+    bids,
+    turnIndex: firstPlayerAfterBidding,
+    phase: allBid ? 'PLAYING' : 'BIDDING',
+    revision: state.revision + 1,
+    serverTimeMs: Date.now(),
+    turnDeadlineMs: Date.now() + timeoutMs,
+  };
+}
+
 export function timeoutMove(state: MultiplayerGameState, timeoutMs: number): MultiplayerGameState {
   if (state.status !== 'PLAYING') return state;
   if (Date.now() <= state.turnDeadlineMs) return state;
+
+  // Handle bidding timeout
+  if (state.phase === 'BIDDING') {
+    const defaultBid = state.gameType === 'CALLBREAK' ? 1 : 1;
+    return submitBid(state, state.turnIndex, defaultBid, timeoutMs);
+  }
+
+  // Handle passing timeout — auto-select 3 highest cards for ALL players who haven't passed yet
+  if (state.phase === 'PASSING') {
+    let current = state;
+    const selections = current.passingSelections || { 0: [], 1: [], 2: [], 3: [] };
+    for (let s = 0; s < 4; s++) {
+      if ((selections[s] || []).length === 3) continue;
+      const hand = current.hands[s] || [];
+      const sorted = [...hand].sort((a, b) => b.value - a.value);
+      const autoIds = sorted.slice(0, 3).map((c) => c.id);
+      current = submitPass(current, s, autoIds, timeoutMs);
+    }
+    return current;
+  }
 
   const rules = getRules(state.gameType);
   const move = rules.getTimeoutMove(state, state.turnIndex);

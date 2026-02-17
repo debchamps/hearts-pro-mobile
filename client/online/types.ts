@@ -20,6 +20,12 @@ export interface TrickPlay {
   card: Card;
 }
 
+export interface LastCompletedTrick {
+  trick: TrickPlay[];
+  winner: number;
+  at: number;
+}
+
 export interface MultiplayerGameState {
   matchId: string;
   gameType: GameType;
@@ -39,9 +45,11 @@ export interface MultiplayerGameState {
   status: 'WAITING' | 'PLAYING' | 'COMPLETED';
   phase?: 'WAITING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'COMPLETED';
   passingSelections?: Record<number, string[]>;
-  passingDirection?: 'LEFT' | 'RIGHT' | 'ACROSS';
+  passingDirection?: 'LEFT' | 'RIGHT' | 'ACROSS' | 'NONE';
   turnDeadlineMs: number;
   serverTimeMs: number;
+  lastCompletedTrick?: LastCompletedTrick;
+  dealerIndex?: number;
 }
 
 export interface GameStateDelta {

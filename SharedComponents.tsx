@@ -15,27 +15,37 @@ export const Overlay = memo(({ title, subtitle, children, fullWidth = false }: {
 
 export const CardView = memo(({ card, size = 'md', inactive = false, highlighted = false, hint = false }: { card: Card, size?: 'sm' | 'md' | 'lg', inactive?: boolean, highlighted?: boolean, hint?: boolean }) => {
   if (!card) return null;
-  const dims = size === 'sm' ? 'w-[2.85rem] h-[3.8rem]' : size === 'md' ? 'w-[4.75rem] h-[6.33rem]' : 'w-[5.51rem] h-[7.41rem]';
-  const rankStyle = size === 'sm' ? 'text-[11px]' : size === 'md' ? 'text-lg' : 'text-xl';
-  const cornerSymStyle = size === 'sm' ? 'text-[7px]' : size === 'md' ? 'text-[10px]' : 'text-xs';
-  const brSymStyle = size === 'sm' ? 'text-xs' : size === 'md' ? 'text-lg' : 'text-xl';
-  const hugeIconStyle = size === 'sm' ? 'text-2xl' : size === 'md' ? 'text-5xl' : 'text-6xl';
-  
-  const showRing = highlighted || hint;
-  const ringColor = hint ? 'ring-cyan-400 shadow-[0_0_35px_rgba(34,211,238,0.9)]' : 'ring-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)]';
+  // Improved card sizes with standard playing card 2.5:3.5 aspect ratio
+  const dims = size === 'sm' ? 'w-[2.85rem] h-[3.99rem]' : size === 'md' ? 'w-[4.5rem] h-[6.3rem]' : 'w-[5rem] h-[7rem]';
+  const rankStyle = size === 'sm' ? 'text-[11px]' : size === 'md' ? 'text-[17px]' : 'text-[19px]';
+  const cornerSymStyle = size === 'sm' ? 'text-[7px]' : size === 'md' ? 'text-[10px]' : 'text-[11px]';
+  const brRankStyle = size === 'sm' ? 'text-[11px]' : size === 'md' ? 'text-[17px]' : 'text-[19px]';
+  const brSymStyle = size === 'sm' ? 'text-[7px]' : size === 'md' ? 'text-[10px]' : 'text-[11px]';
+  const hugeIconStyle = size === 'sm' ? 'text-2xl' : size === 'md' ? 'text-4xl' : 'text-5xl';
 
-  const cornerTop = size === 'sm' ? 'top-0.5' : 'top-1';
-  const cornerLeft = size === 'sm' ? 'left-0.5' : 'left-1';
+  const showRing = highlighted || hint;
+  const ringColor = hint ? 'ring-cyan-400 shadow-[0_0_30px_rgba(34,211,238,0.8)]' : 'ring-[3px] ring-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.5)]';
+
+  const cornerTop = size === 'sm' ? 'top-0.5' : 'top-[3px]';
+  const cornerLeft = size === 'sm' ? 'left-0.5' : 'left-[4px]';
 
   return (
-    <div className={`${dims} bg-white rounded-lg card-shadow relative overflow-hidden transition-all duration-300 ${SUIT_COLORS[card.suit] || 'text-black'} ${showRing ? `ring-4 ${ringColor}` : ''} ${hint ? 'animate-pulse' : ''} ${inactive ? 'grayscale brightness-[0.7] contrast-[0.9]' : 'opacity-100'}`}>
+    <div className={`${dims} bg-gradient-to-br from-white via-gray-50 to-gray-100 rounded-[0.5rem] card-shadow relative overflow-hidden transition-all duration-200 ${SUIT_COLORS[card.suit] || 'text-black'} ${showRing ? ringColor : ''} ${hint ? 'animate-pulse' : ''} ${inactive ? 'grayscale brightness-[0.65] contrast-[0.85] saturate-[0.4]' : ''}`}>
+      {/* Top-left corner */}
       <div className={`absolute ${cornerTop} ${cornerLeft} flex flex-col items-center leading-none z-10`}>
         <div className={`font-black tracking-tighter ${rankStyle}`}>{card.rank}</div>
         <div className={`${cornerSymStyle} -mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
       </div>
-      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.08] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>{SUIT_SYMBOLS[card.suit]}</div>
-      <div className={`absolute bottom-1 right-1 leading-none z-10 ${brSymStyle} pointer-events-none`}>{SUIT_SYMBOLS[card.suit]}</div>
-      {inactive && <div className="absolute inset-0 bg-black/40 z-20 pointer-events-none" />}
+      {/* Center watermark */}
+      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.06] ${hugeIconStyle} leading-none pointer-events-none rotate-[-8deg]`}>{SUIT_SYMBOLS[card.suit]}</div>
+      {/* Bottom-right corner (rotated 180 to mirror top-left) */}
+      <div className={`absolute bottom-[3px] right-[4px] leading-none z-10 pointer-events-none rotate-180 flex flex-col items-center`}>
+        <div className={`font-black tracking-tighter ${brRankStyle}`}>{card.rank}</div>
+        <div className={`${brSymStyle} -mt-0.5`}>{SUIT_SYMBOLS[card.suit]}</div>
+      </div>
+      {/* Subtle inner frame */}
+      <div className="absolute inset-[1px] rounded-[0.45rem] border border-gray-200/40 pointer-events-none" />
+      {inactive && <div className="absolute inset-0 bg-black/35 z-20 pointer-events-none rounded-[0.5rem]" />}
     </div>
   );
 });
