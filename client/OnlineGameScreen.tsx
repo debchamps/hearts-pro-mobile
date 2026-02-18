@@ -11,21 +11,19 @@ import { getOnlineTurnDurationMs } from './online/config';
 import { sortCardsBySuitThenRankAsc } from '../services/cardSort';
 
 // ---------- Animation timing constants (match offline feel) ----------
-const BOT_CARD_DELAY_MS = 500;      // delay between sequential bot card plays
-const TRICK_SHOW_MS = 800;          // show completed trick before clearing animation
-const TRICK_CLEAR_MS = 650;         // clearing animation duration (matches CSS)
+const BOT_CARD_DELAY_MS = 500;      // delay between sequential bot card plays (offline uses 450-1000ms)
+const TRICK_PAUSE_MS = 800;          // show completed 4-card trick before clearing (offline: 800ms)
+const TRICK_CLEAR_ANIM_MS = 700;     // clear animation duration (CSS is 650ms, extra 50ms buffer)
 
 type TrickPlay = { seat: number; card: any };
+type CompletedTrick = { trick: TrickPlay[]; winner: number; at: number };
 
 export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onExit: () => void }) {
   const serviceRef = useRef<MultiplayerService>(new MultiplayerService());
   const subscriptionListenerRef = useRef<((next: MultiplayerGameState) => void) | null>(null);
 
-  // serverState = authoritative truth from the network layer
+  // The real server state — always kept up to date
   const [serverState, setServerState] = useState<MultiplayerGameState | null>(null);
-
-  // displayState = what we actually render (may lag behind serverState during trick animations)
-  const [displayState, setDisplayState] = useState<MultiplayerGameState | null>(null);
 
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -33,28 +31,256 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const [message, setMessage] = useState<string>('');
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
   const [debugTapCount, setDebugTapCount] = useState(0);
-  const [renderTrick, setRenderTrick] = useState<TrickPlay[]>([]);
-  const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
   const [clockMs, setClockMs] = useState<number>(Date.now());
-  const clearTimerRef = useRef<number | null>(null);
-  const lastCompletedAtRef = useRef<number>(0);
   const [selectedPassIds, setSelectedPassIds] = useState<string[]>([]);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
   const [debugLines, setDebugLines] = useState<string[]>([]);
 
-  // ---- Animation queue state ----
-  // When the server sends a state with multiple new trick cards, we queue them and
-  // reveal them one by one with BOT_CARD_DELAY_MS between each.
-  const animQueueRef = useRef<Array<{ trick: TrickPlay[]; final?: boolean; completed?: { trick: TrickPlay[]; winner: number; at: number } }>>([]);
+  // ===== TRICK ANIMATION STATE =====
+  // These control what the CENTER AREA shows
+  const [renderTrick, setRenderTrick] = useState<TrickPlay[]>([]);
+  const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
+
+  // Card the human just played optimistically (removed from hand display)
+  const [optimisticCardId, setOptimisticCardId] = useState<string | null>(null);
+
+  // Refs for animation queue (imperative, no re-render loops)
   const animTimerRef = useRef<number | null>(null);
   const isAnimatingRef = useRef(false);
-  // Track the trick we last rendered to detect new cards
-  const lastRenderedTrickKeyRef = useRef<string>('');
-  // Optimistic card ID: card human just played, shown immediately before server confirms
-  const [optimisticPlay, setOptimisticPlay] = useState<TrickPlay | null>(null);
+  // The "target" trick cards we're animating toward (from the latest server state)
+  const targetTrickRef = useRef<TrickPlay[]>([]);
+  const targetCompletedRef = useRef<CompletedTrick | null>(null);
+  const lastProcessedCompletedAtRef = useRef<number>(0);
+  // How many cards are currently shown in the trick area
+  const shownCountRef = useRef(0);
 
-  // Shorthand: the state used for rendering (displayState when available, else serverState)
-  const state = displayState ?? serverState;
+  // ===== Derived display state =====
+  // We always render from serverState. The animation queue only controls renderTrick/clearingTrickWinner.
+  const state = serverState;
+
+  // ---------- Animation queue engine ----------
+  const clearAnimTimer = useCallback(() => {
+    if (animTimerRef.current !== null) {
+      window.clearTimeout(animTimerRef.current);
+      animTimerRef.current = null;
+    }
+  }, []);
+
+  // Processes the next step in the animation queue
+  const processNextAnimStep = useCallback(() => {
+    clearAnimTimer();
+    const target = targetTrickRef.current;
+    const completed = targetCompletedRef.current;
+    const shown = shownCountRef.current;
+
+    // Step A: If there are more cards in target trick to reveal, show the next one
+    if (shown < target.length) {
+      const nextCount = shown + 1;
+      shownCountRef.current = nextCount;
+      setRenderTrick(target.slice(0, nextCount));
+      setClearingTrickWinner(null);
+
+      // If more cards to show, schedule next
+      if (nextCount < target.length) {
+        isAnimatingRef.current = true;
+        animTimerRef.current = window.setTimeout(processNextAnimStep, BOT_CARD_DELAY_MS);
+      } else {
+        // All target cards shown. Is a trick completion pending?
+        if (completed && completed.at > lastProcessedCompletedAtRef.current) {
+          // Trick is complete (4 cards). Pause then clear.
+          isAnimatingRef.current = true;
+          animTimerRef.current = window.setTimeout(() => {
+            // Start clear animation
+            setClearingTrickWinner(completed.winner);
+            lastProcessedCompletedAtRef.current = completed.at;
+            targetCompletedRef.current = null;
+
+            // After clear animation, reset trick area
+            animTimerRef.current = window.setTimeout(() => {
+              setRenderTrick([]);
+              setClearingTrickWinner(null);
+              shownCountRef.current = 0;
+              targetTrickRef.current = [];
+              isAnimatingRef.current = false;
+
+              // Check if a NEW server state arrived while we were animating
+              drainPending();
+            }, TRICK_CLEAR_ANIM_MS);
+          }, TRICK_PAUSE_MS);
+        } else {
+          // No completion — we're done animating
+          isAnimatingRef.current = false;
+          drainPending();
+        }
+      }
+      return;
+    }
+
+    // Step B: All target cards already shown. Check for pending completion.
+    if (completed && completed.at > lastProcessedCompletedAtRef.current) {
+      // Need to show the completed trick if we haven't already
+      if (completed.trick.length > shown) {
+        // Server sent completed trick with more cards than we've shown
+        // Queue the remaining cards
+        targetTrickRef.current = completed.trick;
+        shownCountRef.current = shown; // keep current count
+        isAnimatingRef.current = true;
+        animTimerRef.current = window.setTimeout(processNextAnimStep, BOT_CARD_DELAY_MS);
+        return;
+      }
+
+      // All cards already shown, just do the clear
+      isAnimatingRef.current = true;
+      setRenderTrick(completed.trick);
+      setClearingTrickWinner(null);
+      animTimerRef.current = window.setTimeout(() => {
+        setClearingTrickWinner(completed.winner);
+        lastProcessedCompletedAtRef.current = completed.at;
+        targetCompletedRef.current = null;
+
+        animTimerRef.current = window.setTimeout(() => {
+          setRenderTrick([]);
+          setClearingTrickWinner(null);
+          shownCountRef.current = 0;
+          targetTrickRef.current = [];
+          isAnimatingRef.current = false;
+          drainPending();
+        }, TRICK_CLEAR_ANIM_MS);
+      }, TRICK_PAUSE_MS);
+      return;
+    }
+
+    // Nothing to do
+    isAnimatingRef.current = false;
+    drainPending();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearAnimTimer]);
+
+  // Pending server state that arrived while animation was running
+  const pendingServerRef = useRef<MultiplayerGameState | null>(null);
+
+  const drainPending = useCallback(() => {
+    const pending = pendingServerRef.current;
+    if (!pending) return;
+    pendingServerRef.current = null;
+    reconcileTrickAnim(pending);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Core reconciliation: given a new server state, figure out what to animate
+  const reconcileTrickAnim = useCallback((ss: MultiplayerGameState) => {
+    if (ss.status !== 'PLAYING' || ss.phase !== 'PLAYING') {
+      // Not in playing phase — just clear everything
+      clearAnimTimer();
+      isAnimatingRef.current = false;
+      targetTrickRef.current = [];
+      targetCompletedRef.current = null;
+      shownCountRef.current = 0;
+      setRenderTrick([]);
+      setClearingTrickWinner(null);
+      return;
+    }
+
+    const serverTrick = (ss.currentTrick || []) as TrickPlay[];
+    const serverCompleted = (ss as any).lastCompletedTrick as CompletedTrick | null;
+
+    // If we're currently animating, defer processing
+    if (isAnimatingRef.current) {
+      // But update targets so the animation chain picks them up
+      if (serverTrick.length > 0) {
+        targetTrickRef.current = serverTrick;
+      }
+      if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
+        targetCompletedRef.current = serverCompleted;
+      }
+      pendingServerRef.current = null; // clear; we already merged into targets
+      return;
+    }
+
+    // Not animating. Figure out what's new.
+    const shown = shownCountRef.current;
+
+    // Case 1: Server has a completed trick we haven't processed
+    if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
+      if (serverTrick.length > 0) {
+        // Trick in progress (server has partial trick + a new completed trick from a previous trick?)
+        // This shouldn't normally happen, but handle gracefully
+        targetTrickRef.current = serverTrick;
+      } else {
+        // currentTrick is empty, but lastCompletedTrick is new.
+        // Show the completed trick cards, then clear.
+        targetTrickRef.current = serverCompleted.trick;
+      }
+      targetCompletedRef.current = serverCompleted;
+      // Start from where we left off (or 0 if trick was already cleared)
+      if (shown > 0 && shown <= targetTrickRef.current.length) {
+        // Some cards already shown from optimistic/previous state
+        shownCountRef.current = shown;
+      } else {
+        shownCountRef.current = 0;
+      }
+      isAnimatingRef.current = true;
+      processNextAnimStep();
+      return;
+    }
+
+    // Case 2: Server has more trick cards than we're showing
+    if (serverTrick.length > shown) {
+      targetTrickRef.current = serverTrick;
+      targetCompletedRef.current = null;
+      // Don't reset shownCountRef — start from where we are
+      isAnimatingRef.current = true;
+      processNextAnimStep();
+      return;
+    }
+
+    // Case 3: Server trick count ≤ shown (new trick started, or same trick)
+    if (serverTrick.length < shown) {
+      // New trick started — reset
+      targetTrickRef.current = serverTrick;
+      shownCountRef.current = 0;
+      if (serverTrick.length > 0) {
+        isAnimatingRef.current = true;
+        processNextAnimStep();
+      } else {
+        setRenderTrick([]);
+        setClearingTrickWinner(null);
+      }
+      return;
+    }
+
+    // Same count — no animation needed, just sync
+    if (serverTrick.length === shown && serverTrick.length > 0) {
+      targetTrickRef.current = serverTrick;
+      setRenderTrick(serverTrick);
+    } else if (serverTrick.length === 0 && shown === 0) {
+      // Nothing in trick area — ensure clean
+      setRenderTrick([]);
+      setClearingTrickWinner(null);
+    }
+  }, [clearAnimTimer, processNextAnimStep]);
+
+  // ---------- React to serverState changes ----------
+  useEffect(() => {
+    if (!serverState) return;
+    if (isAnimatingRef.current) {
+      // Don't interrupt animation. Store as pending.
+      pendingServerRef.current = serverState;
+      // But do merge target data so animation chain can use it
+      const serverTrick = (serverState.currentTrick || []) as TrickPlay[];
+      const serverCompleted = (serverState as any).lastCompletedTrick as CompletedTrick | null;
+      if (serverTrick.length > targetTrickRef.current.length) {
+        targetTrickRef.current = serverTrick;
+      }
+      if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
+        targetCompletedRef.current = serverCompleted;
+      }
+      return;
+    }
+    reconcileTrickAnim(serverState);
+  // We intentionally only react to serverState changes, not reconcileTrickAnim
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverState]);
 
   // ---------- Init & Subscription ----------
   useEffect(() => {
@@ -67,7 +293,6 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         });
         if (!mounted) return;
         setServerState(created);
-        setDisplayState(created);
         const boundListener = (next: MultiplayerGameState) => {
           setServerState((prev) => {
             if (!prev) return { ...next };
@@ -86,6 +311,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     init();
     return () => {
       mounted = false;
+      clearAnimTimer();
       if (subscriptionListenerRef.current) {
         void serviceRef.current.unsubscribeFromMatch(subscriptionListenerRef.current);
         subscriptionListenerRef.current = null;
@@ -93,161 +319,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         void serviceRef.current.unsubscribeFromMatch();
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameType]);
-
-  // ---------- Flush animation queue one step at a time ----------
-  const flushQueue = useCallback(() => {
-    if (animTimerRef.current !== null) {
-      window.clearTimeout(animTimerRef.current);
-      animTimerRef.current = null;
-    }
-    if (animQueueRef.current.length === 0) {
-      isAnimatingRef.current = false;
-      // Queue empty — snap displayState to serverState
-      setDisplayState((prev) => {
-        const ss = serviceRef.current.getState();
-        return ss ?? prev;
-      });
-      return;
-    }
-    isAnimatingRef.current = true;
-    const step = animQueueRef.current.shift()!;
-
-    if (step.completed) {
-      // This step represents showing the completed trick, then clearing
-      setRenderTrick(step.completed.trick);
-      setClearingTrickWinner(null);
-
-      // After TRICK_SHOW_MS, start the clear animation
-      animTimerRef.current = window.setTimeout(() => {
-        setClearingTrickWinner(step.completed!.winner);
-        lastCompletedAtRef.current = step.completed!.at;
-
-        // After the clear animation finishes, remove trick and continue queue
-        animTimerRef.current = window.setTimeout(() => {
-          setRenderTrick([]);
-          setClearingTrickWinner(null);
-          flushQueue();
-        }, TRICK_CLEAR_MS);
-      }, TRICK_SHOW_MS);
-    } else {
-      // This step reveals trick cards up to a certain point
-      setRenderTrick(step.trick);
-      setClearingTrickWinner(null);
-
-      // Schedule next step
-      animTimerRef.current = window.setTimeout(() => {
-        flushQueue();
-      }, BOT_CARD_DELAY_MS);
-    }
-  }, []);
-
-  // ---------- Reconcile serverState → animation queue → displayState ----------
-  useEffect(() => {
-    if (!serverState) return;
-
-    // For non-PLAYING phases or non-trick-related changes, pass through immediately
-    if (serverState.status !== 'PLAYING' || (serverState.phase !== 'PLAYING' && serverState.phase !== undefined)) {
-      // If not in playing phase, just pass-through
-      if (serverState.phase !== 'PLAYING') {
-        if (!isAnimatingRef.current) {
-          setDisplayState({ ...serverState });
-          setRenderTrick([]);
-          setClearingTrickWinner(null);
-        }
-        return;
-      }
-    }
-
-    const serverTrick = (serverState.currentTrick || []) as TrickPlay[];
-    const serverCompleted = (serverState as any).lastCompletedTrick as { trick: TrickPlay[]; winner: number; at: number } | null;
-
-    // Build a key to detect if this is actually new trick data
-    const trickKey = serverTrick.map(t => `${t.seat}:${t.card?.id}`).join(',')
-      + (serverCompleted?.at ? `|C${serverCompleted.at}` : '')
-      + `|R${serverState.revision}`;
-
-    if (trickKey === lastRenderedTrickKeyRef.current && !optimisticPlay) {
-      // No trick changes — still update displayState for non-trick fields
-      if (!isAnimatingRef.current) {
-        setDisplayState({ ...serverState });
-      }
-      return;
-    }
-    lastRenderedTrickKeyRef.current = trickKey;
-
-    // Clear optimistic play now that server confirmed
-    if (optimisticPlay) {
-      setOptimisticPlay(null);
-    }
-
-    // Figure out how many cards are "new" in the trick compared to what we're currently showing
-    const currentlyShown = renderTrick.length;
-
-    // Case 1: Server trick has MORE cards than we're showing → queue the new ones
-    if (serverTrick.length > currentlyShown && !isAnimatingRef.current) {
-      // Build intermediate steps: show cards one by one
-      const newSteps: typeof animQueueRef.current = [];
-      for (let i = currentlyShown + 1; i <= serverTrick.length; i++) {
-        newSteps.push({ trick: serverTrick.slice(0, i) });
-      }
-      animQueueRef.current.push(...newSteps);
-
-      // If there's also a completed trick (server jumped past trick completion)
-      // this can happen when the 4th card completes the trick in the same response
-      if (serverCompleted && serverCompleted.at > lastCompletedAtRef.current) {
-        // The last step already shows all 4 cards. Now add the clear animation.
-        animQueueRef.current.push({
-          trick: [],
-          completed: serverCompleted,
-        });
-      }
-
-      // Update displayState for non-trick fields (scores, turn, etc.)
-      setDisplayState({ ...serverState });
-      flushQueue();
-      return;
-    }
-
-    // Case 2: Server trick went from N cards to 0 (trick completed) and we still show cards
-    if (serverTrick.length === 0 && serverCompleted && serverCompleted.at > lastCompletedAtRef.current) {
-      if (isAnimatingRef.current) {
-        // Already animating — append the completion step
-        animQueueRef.current.push({
-          trick: [],
-          completed: serverCompleted,
-        });
-        setDisplayState({ ...serverState });
-        return;
-      }
-
-      // Not animating — if we have cards showing, first show all 4, then clear
-      if (currentlyShown > 0 && currentlyShown < 4 && serverCompleted.trick.length === 4) {
-        // Queue the missing cards first
-        for (let i = currentlyShown + 1; i <= serverCompleted.trick.length; i++) {
-          animQueueRef.current.push({ trick: serverCompleted.trick.slice(0, i) });
-        }
-      }
-      animQueueRef.current.push({
-        trick: [],
-        completed: serverCompleted,
-      });
-      setDisplayState({ ...serverState });
-      flushQueue();
-      return;
-    }
-
-    // Case 3: Server trick is the same or fewer cards (e.g. new trick started)
-    if (!isAnimatingRef.current) {
-      setDisplayState({ ...serverState });
-      if (serverTrick.length > 0) {
-        setRenderTrick(serverTrick);
-      } else if (serverTrick.length === 0 && currentlyShown > 0 && clearingTrickWinner === null) {
-        // Trick area was just cleared by server (no completed data or already processed)
-        setRenderTrick([]);
-      }
-    }
-  }, [serverState, flushQueue, optimisticPlay, renderTrick.length, clearingTrickWinner]);
 
   // ---------- Turn Timeout (covers PLAYING, BIDDING, and PASSING phases) ----------
   useEffect(() => {
@@ -285,14 +358,13 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     return () => window.clearInterval(timer);
   }, []);
 
-  // ---------- Debug tap reset ----------
+  // ---------- Debug ----------
   useEffect(() => {
     if (debugTapCount <= 0) return;
     const timer = window.setTimeout(() => setDebugTapCount(0), 1200);
     return () => window.clearTimeout(timer);
   }, [debugTapCount]);
 
-  // ---------- Debug log refresh (when overlay visible) ----------
   useEffect(() => {
     if (!showDebugOverlay) return;
     setDebugLines([...getDebugLines()]);
@@ -305,12 +377,10 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     window.setTimeout(() => setMessage((prev) => (prev === text ? '' : prev)), ms);
   };
 
-  // ---------- Cleanup timers ----------
+  // ---------- Cleanup ----------
   useEffect(() => {
-    return () => {
-      if (clearTimerRef.current !== null) window.clearTimeout(clearTimerRef.current);
-      if (animTimerRef.current !== null) window.clearTimeout(animTimerRef.current);
-    };
+    return () => { clearAnimTimer(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---------- Derived state ----------
@@ -318,7 +388,6 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const toViewSeat = (seat: number) => (seat - selfSeat + 4) % 4;
   const toGlobalSeat = (viewSeat: number) => (viewSeat + selfSeat) % 4;
 
-  // Properly derive phase from state
   const phase = useMemo<'WAITING' | 'PASSING' | 'BIDDING' | 'PLAYING' | 'COMPLETED'>(() => {
     if (!state) return 'WAITING';
     if (state.phase) return state.phase as any;
@@ -327,17 +396,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     return 'PLAYING';
   }, [state?.phase, state?.status]);
 
-  // Build hand from displayState, but also exclude optimistic card
+  // Build hand — exclude card that was optimistically played
   const hand = useMemo(() => {
     if (!state) return [];
     const hands = (state as any).hands || {};
-    let h = hands[selfSeat] || [];
-    // Remove optimistically played card from display hand
-    if (optimisticPlay) {
-      h = h.filter((c: any) => c.id !== optimisticPlay.card.id);
+    let h: any[] = hands[selfSeat] || [];
+    if (optimisticCardId) {
+      h = h.filter((c: any) => c.id !== optimisticCardId);
     }
     return sortCardsBySuitThenRankAsc(h);
-  }, [state, selfSeat, optimisticPlay]);
+  }, [state, selfSeat, optimisticCardId]);
 
   const avatarPlayers: Player[] = useMemo(() => {
     if (!state) return [];
@@ -346,7 +414,6 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     const trickWins = (state as any).trickWins || (state as any).tricksWon || { 0: 0, 1: 0, 2: 0, 3: 0 };
     const bids = (state as any).bids || {};
     const players = Array.isArray((state as any).players) ? (state as any).players : [];
-
     return players.map((p: any) => ({
       id: p.seat,
       name: p.name,
@@ -359,9 +426,10 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       tricksWon: trickWins[p.seat] || 0,
       teamId: p.teamId,
     })).sort((a: Player, b: Player) => toViewSeat(a.id) - toViewSeat(b.id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, selfSeat]);
 
-  // ---------- Card layout ----------
+  // Card layout
   const handLayout = useMemo(() => {
     if (!hand.length) return [] as Array<{ card: any; x: number }>;
     const containerWidth = Math.min(typeof window !== 'undefined' ? window.innerWidth : 420, 440);
@@ -370,7 +438,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     const step = hand.length > 1 ? Math.max(20, (available - cardWidth) / (hand.length - 1)) : 0;
     const total = cardWidth + step * (hand.length - 1);
     let currentX = Math.max(8, (containerWidth - total) / 2);
-    return hand.map((card: any, idx: number) => {
+    return hand.map((card: any) => {
       const x = currentX;
       currentX += step;
       return { card, x };
@@ -384,19 +452,15 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     if (!Array.isArray(currentHand) || currentHand.length === 0) return new Set<string>();
     const leadSuit = (state as any).leadSuit || null;
     if (!leadSuit) return new Set(currentHand.map((c: any) => c.id));
-
     const hasLeadSuit = currentHand.some((c: any) => c.suit === leadSuit);
     if (hasLeadSuit) return new Set(currentHand.filter((c: any) => c.suit === leadSuit).map((c: any) => c.id));
-
     if (state.gameType === 'CALLBREAK') {
       const hasSpades = currentHand.some((c: any) => c.suit === 'SPADES');
       if (hasSpades) return new Set(currentHand.filter((c: any) => c.suit === 'SPADES').map((c: any) => c.id));
     }
-
     return new Set(currentHand.map((c: any) => c.id));
   }, [state, selfSeat, phase]);
 
-  // Reset pass selection when phase changes
   useEffect(() => {
     if (phase !== 'PASSING') setSelectedPassIds([]);
   }, [phase]);
@@ -406,13 +470,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo({ id, startY: clientY, currentY: clientY });
   };
-
   const onDragMove = (e: React.MouseEvent | React.TouchEvent) => {
     if (!dragInfo) return;
     const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo(prev => prev ? { ...prev, currentY: clientY } : null);
   };
-
   const onDragEnd = (card: any) => {
     if (!dragInfo) return;
     const diff = dragInfo.startY - dragInfo.currentY;
@@ -427,39 +489,29 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   // ---------- Actions ----------
   const submit = async (cardId: string) => {
     if (!state) return;
-    if (state.status === 'WAITING' || phase === 'WAITING') {
-      showMessage('Waiting for players...');
-      return;
-    }
+    if (state.status === 'WAITING' || phase === 'WAITING') { showMessage('Waiting for players...'); return; }
     if (state.status !== 'PLAYING') return;
-    if (phase !== 'PLAYING') {
-      showMessage(phase === 'PASSING' ? 'Complete passing first' : phase === 'BIDDING' ? 'Complete bidding first' : 'Setting up...');
-      return;
-    }
-    if (state.turnIndex !== selfSeat) {
-      showMessage('Wait for your turn');
-      return;
-    }
-    if (!playableIds.has(cardId)) {
-      const lead = (state as any).leadSuit;
-      showMessage(lead ? `Must follow ${lead}` : 'Invalid move');
-      return;
-    }
+    if (phase !== 'PLAYING') { showMessage(phase === 'PASSING' ? 'Complete passing first' : phase === 'BIDDING' ? 'Complete bidding first' : 'Setting up...'); return; }
+    if (state.turnIndex !== selfSeat) { showMessage('Wait for your turn'); return; }
+    if (!playableIds.has(cardId)) { const lead = (state as any).leadSuit; showMessage(lead ? `Must follow ${lead}` : 'Invalid move'); return; }
 
-    // ---- Optimistic update: immediately show card in trick area ----
-    const hand = ((state as any).hands || {})[selfSeat] || [];
-    const card = hand.find((c: any) => c.id === cardId);
+    // ---- OPTIMISTIC: immediately remove card from hand and show in trick ----
+    const currentHand: any[] = ((state as any).hands || {})[selfSeat] || [];
+    const card = currentHand.find((c: any) => c.id === cardId);
     if (card) {
-      const optPlay: TrickPlay = { seat: selfSeat, card };
-      setOptimisticPlay(optPlay);
-      // Show the card in the trick immediately
-      setRenderTrick(prev => [...prev, optPlay]);
+      setOptimisticCardId(cardId);
+      // Show card in trick area immediately
+      const currentTrick = renderTrick.slice(); // what's currently showing
+      currentTrick.push({ seat: selfSeat, card });
+      setRenderTrick(currentTrick);
+      shownCountRef.current = currentTrick.length;
+      targetTrickRef.current = currentTrick;
     }
 
     try {
       const next = await serviceRef.current.submitMove(cardId);
-      // Clear optimistic — the reconciler will handle sequencing bot responses
-      setOptimisticPlay(null);
+      // Clear optimistic — server confirmed
+      setOptimisticCardId(null);
       setServerState({ ...next });
       setMessage('');
 
@@ -472,16 +524,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         } catch {}
       }
     } catch (e) {
-      // Revert optimistic on error
-      setOptimisticPlay(null);
+      setOptimisticCardId(null);
       const msg = (e as Error).message || '';
-      if (
-        msg.includes('Revision mismatch') ||
-        msg.includes('Not your turn') ||
-        msg.includes('Round setup in progress') ||
-        msg.includes('Not in bidding phase') ||
-        msg.includes('Not in passing phase')
-      ) {
+      if (msg.includes('Revision mismatch') || msg.includes('Not your turn') || msg.includes('Round setup in progress') || msg.includes('Not in bidding phase') || msg.includes('Not in passing phase')) {
         try {
           const next = await serviceRef.current.syncSnapshot();
           if (next) setServerState({ ...next });
@@ -504,10 +549,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   const confirmPass = async () => {
     if (!state || phase !== 'PASSING') return;
-    if (selectedPassIds.length !== 3) {
-      showMessage('Select exactly 3 cards');
-      return;
-    }
+    if (selectedPassIds.length !== 3) { showMessage('Select exactly 3 cards'); return; }
     try {
       const next = await serviceRef.current.submitPass(selectedPassIds);
       setServerState({ ...next });
@@ -516,13 +558,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     } catch (e) {
       const msg = (e as Error).message || '';
       if (msg.includes('Revision mismatch') || msg.includes('Already passed')) {
-        try {
-          const next = await serviceRef.current.syncSnapshot();
-          if (next) setServerState({ ...next });
-          showMessage('Synced', 1000);
-          setSelectedPassIds([]);
-          return;
-        } catch {}
+        try { const next = await serviceRef.current.syncSnapshot(); if (next) setServerState({ ...next }); showMessage('Synced', 1000); setSelectedPassIds([]); return; } catch {}
       }
       setError(msg);
     }
@@ -530,10 +566,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   const submitBid = async (bid: number) => {
     if (!state || phase !== 'BIDDING') return;
-    if (state.turnIndex !== selfSeat) {
-      showMessage('Wait for your bidding turn');
-      return;
-    }
+    if (state.turnIndex !== selfSeat) { showMessage('Wait for your bidding turn'); return; }
     try {
       const next = await serviceRef.current.submitBid(bid);
       setServerState({ ...next });
@@ -541,12 +574,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     } catch (e) {
       const msg = (e as Error).message || '';
       if (msg.includes('Revision mismatch') || msg.includes('Not your turn')) {
-        try {
-          const next = await serviceRef.current.syncSnapshot();
-          if (next) setServerState({ ...next });
-          showMessage('Synced', 1000);
-          return;
-        } catch {}
+        try { const next = await serviceRef.current.syncSnapshot(); if (next) setServerState({ ...next }); showMessage('Synced', 1000); return; } catch {}
       }
       setError(msg);
     }
@@ -587,36 +615,25 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       {/* HEADER BAR */}
       <div className="h-[10%] w-full flex justify-between items-center px-4 pt-[var(--safe-top)] z-50 bg-black/80 shadow-2xl border-b border-white/5">
         <button className="w-10 h-10 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-lg" onClick={onExit}>🏠</button>
-
-        <button
-          type="button"
-          className="flex flex-col items-center"
-          onClick={() => {
-            const next = debugTapCount + 1;
-            if (next >= 5) { setShowDebugOverlay(p => !p); setDebugTapCount(0); return; }
-            setDebugTapCount(next);
-          }}
-        >
+        <button type="button" className="flex flex-col items-center" onClick={() => {
+          const next = debugTapCount + 1;
+          if (next >= 5) { setShowDebugOverlay(p => !p); setDebugTapCount(0); return; }
+          setDebugTapCount(next);
+        }}>
           <span className="text-[8px] text-white/30 font-black uppercase tracking-[0.3em]">{gameType} Online</span>
           <span className="text-xl font-black italic text-yellow-500 leading-tight">
             {phase === 'PASSING' ? 'PASSING' : phase === 'BIDDING' ? 'BIDDING' : phase === 'COMPLETED' ? 'DONE' : `R${state.roundNumber || 1}`}
           </span>
         </button>
-
         {state.status === 'PLAYING' && phase === 'PLAYING' ? (
           <TurnTimer
             deadlineMs={state.turnDeadlineMs}
             serverTimeMs={state.serverTimeMs}
-            durationMs={getOnlineTurnDurationMs(
-              gameType,
-              !!(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected)
-            )}
+            durationMs={getOnlineTurnDurationMs(gameType, !!(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected))}
           />
         ) : (
           <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center">
-            <span className="text-[9px] font-black uppercase text-yellow-300/70">
-              {phase === 'WAITING' ? '⏳' : phase === 'COMPLETED' ? '🏆' : '⏳'}
-            </span>
+            <span className="text-[9px] font-black uppercase text-yellow-300/70">{phase === 'WAITING' ? '⏳' : phase === 'COMPLETED' ? '🏆' : '⏳'}</span>
           </div>
         )}
       </div>
@@ -624,9 +641,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       {/* MESSAGE BANNER */}
       <div className="absolute top-[12%] left-1/2 -translate-x-1/2 z-[100] w-full flex justify-center pointer-events-none px-6">
         {message && (
-          <div className="bg-yellow-400 text-black px-5 py-2 rounded-full text-[10px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">
-            {message}
-          </div>
+          <div className="bg-yellow-400 text-black px-5 py-2 rounded-full text-[10px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">{message}</div>
         )}
       </div>
 
@@ -635,32 +650,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         {/* Player Avatars */}
         {avatarPlayers.map((p) => {
           const viewSeat = toViewSeat(p.id);
-          const positions = [
-            "bottom-6 left-1/2 -translate-x-1/2",
-            "top-1/2 right-3 -translate-y-1/2",
-            "top-6 left-1/2 -translate-x-1/2",
-            "top-1/2 left-3 -translate-y-1/2",
-          ];
-          const isActiveTurn = phase === 'PLAYING'
-            ? toViewSeat(state.turnIndex ?? 0) === viewSeat
-            : phase === 'BIDDING'
-              ? toViewSeat(state.turnIndex ?? 0) === viewSeat
-              : false;
-
+          const positions = ["bottom-6 left-1/2 -translate-x-1/2", "top-1/2 right-3 -translate-y-1/2", "top-6 left-1/2 -translate-x-1/2", "top-1/2 left-3 -translate-y-1/2"];
+          const isActiveTurn = phase === 'PLAYING' ? toViewSeat(state.turnIndex ?? 0) === viewSeat : phase === 'BIDDING' ? toViewSeat(state.turnIndex ?? 0) === viewSeat : false;
           return (
-            <Avatar
-              key={p.id}
-              player={p}
-              pos={positions[viewSeat]}
-              active={isActiveTurn}
+            <Avatar key={p.id} player={p} pos={positions[viewSeat]} active={isActiveTurn}
               isWinner={clearingTrickWinner !== null && toViewSeat(clearingTrickWinner) === viewSeat}
               phase={phase === 'BIDDING' ? 'BIDDING' : phase === 'PASSING' ? 'PASSING' : 'PLAYING'}
               gameType={gameType}
-              turnProgress={
-                state.status === 'PLAYING' && (phase === 'PLAYING' || phase === 'BIDDING') && isActiveTurn
-                  ? Math.max(0, Math.min(1, (state.turnDeadlineMs - clockMs) / getOnlineTurnDurationMs(gameType, !!(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected))))
-                  : undefined
-              }
+              turnProgress={state.status === 'PLAYING' && (phase === 'PLAYING' || phase === 'BIDDING') && isActiveTurn
+                ? Math.max(0, Math.min(1, (state.turnDeadlineMs - clockMs) / getOnlineTurnDurationMs(gameType, !!(state.players?.[state.turnIndex ?? 0]?.isBot || state.players?.[state.turnIndex ?? 0]?.disconnected))))
+                : undefined}
             />
           );
         })}
@@ -732,20 +731,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               const startPos = [{ x: 0, y: 300 }, { x: 350, y: 0 }, { x: 0, y: -300 }, { x: -350, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
               const winDir = [{ x: 0, y: 500 }, { x: 450, y: 0 }, { x: 0, y: -500 }, { x: -450, y: 0 }][winnerViewSeat] || { x: 0, y: 0 };
               return (
-                <div
-                  key={`${t.seat}-${t.card.id}-${idx}`}
+                <div key={`${t.seat}-${t.card.id}-${idx}`}
                   className={`absolute animate-play ${clearingTrickWinner !== null ? 'animate-clear' : ''}`}
-                  style={{
-                    '--play-x': `${off.x}px`,
-                    '--play-y': `${off.y}px`,
-                    '--play-rot': '0deg',
-                    '--start-x': `${startPos.x}px`,
-                    '--start-y': `${startPos.y}px`,
-                    '--clear-x': `${winDir.x}px`,
-                    '--clear-y': `${winDir.y}px`,
-                    zIndex: 10 + idx,
-                  } as any}
-                >
+                  style={{ '--play-x': `${off.x}px`, '--play-y': `${off.y}px`, '--play-rot': '0deg', '--start-x': `${startPos.x}px`, '--start-y': `${startPos.y}px`, '--clear-x': `${winDir.x}px`, '--clear-y': `${winDir.y}px`, zIndex: 10 + idx } as any}>
                   <CardView card={t.card} size="md" />
                 </div>
               );
@@ -762,42 +750,26 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
             const isSelectedForPass = phase === 'PASSING' && state?.turnIndex === selfSeat && selectedPassIds.includes(item.card.id);
             const isInactive = phase === 'PLAYING' && state?.turnIndex === selfSeat && state.status === 'PLAYING' && !playableIds.has(item.card.id);
             return (
-              <div
-                key={item.card.id}
-                onMouseDown={(e) => onDragStart(e, item.card.id)}
-                onTouchStart={(e) => onDragStart(e, item.card.id)}
-                onMouseUp={() => onDragEnd(item.card)}
-                onTouchEnd={() => onDragEnd(item.card)}
+              <div key={item.card.id}
+                onMouseDown={(e) => onDragStart(e, item.card.id)} onTouchStart={(e) => onDragStart(e, item.card.id)}
+                onMouseUp={() => onDragEnd(item.card)} onTouchEnd={() => onDragEnd(item.card)}
                 className={`absolute card-fan-item animate-deal cursor-grab ${isDragging || isSelectedForPass ? 'z-[600]' : ''} ${(phase === 'PLAYING' && state?.turnIndex === selfSeat) || (phase === 'PASSING' && state?.turnIndex === selfSeat) ? 'active:-translate-y-2' : 'opacity-80'}`}
                 style={{
                   transform: `translate3d(${item.x}px, ${Math.pow(idx - (arr.length - 1) / 2, 2) * 0.35 + (isDragging ? dragInfo.currentY - dragInfo.startY : (isSelectedForPass ? -100 : 0))}px, 0) rotate(${(idx - (arr.length - 1) / 2) * 1.5}deg) scale(${isDragging ? 1.12 : 1})`,
                   zIndex: isDragging ? 600 : 100 + idx,
-                }}
-              >
-                <CardView
-                  card={item.card}
-                  size="lg"
-                  inactive={isInactive}
-                  highlighted={isSelectedForPass}
-                />
+                }}>
+                <CardView card={item.card} size="lg" inactive={isInactive} highlighted={isSelectedForPass} />
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* PASSING CONFIRM BUTTON — only when it's your turn to pass */}
+      {/* PASSING CONFIRM BUTTON */}
       {phase === 'PASSING' && state.turnIndex === selfSeat && (
         <div className="absolute bottom-[calc(max(1rem,var(--safe-bottom))+8px)] left-1/2 -translate-x-1/2 z-[150] animate-fadeIn">
-          <button
-            onClick={confirmPass}
-            disabled={selectedPassIds.length !== 3}
-            className={`px-8 py-3.5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl transition-all ${
-              selectedPassIds.length === 3
-                ? 'bg-yellow-500 text-black active:translate-y-1 shadow-yellow-500/30'
-                : 'bg-white/10 text-white/40 border border-white/15'
-            }`}
-          >
+          <button onClick={confirmPass} disabled={selectedPassIds.length !== 3}
+            className={`px-8 py-3.5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl transition-all ${selectedPassIds.length === 3 ? 'bg-yellow-500 text-black active:translate-y-1 shadow-yellow-500/30' : 'bg-white/10 text-white/40 border border-white/15'}`}>
             {selectedPassIds.length < 3 ? `Choose ${3 - selectedPassIds.length} more` : 'Confirm Pass'}
           </button>
         </div>
@@ -812,15 +784,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           </div>
           <div className={`grid gap-2 ${gameType === 'SPADES' ? 'grid-cols-5' : 'grid-cols-4'}`}>
             {(gameType === 'SPADES' ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] : [1, 2, 3, 4, 5, 6, 7, 8]).map((b) => (
-              <button
-                key={b}
-                onClick={() => submitBid(b)}
-                className={`w-11 h-11 rounded-xl font-black text-base transition-all active:scale-90 border ${
-                  b === 0
-                    ? 'bg-rose-600 text-white border-rose-400 hover:bg-rose-500'
-                    : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500 hover:text-black'
-                }`}
-              >
+              <button key={b} onClick={() => submitBid(b)}
+                className={`w-11 h-11 rounded-xl font-black text-base transition-all active:scale-90 border ${b === 0 ? 'bg-rose-600 text-white border-rose-400 hover:bg-rose-500' : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500 hover:text-black'}`}>
                 {b === 0 ? 'NIL' : b}
               </button>
             ))}
@@ -835,9 +800,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
             {avatarPlayers.map((p) => (
               <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-2xl border border-white/10">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center text-2xl">
-                    {p.avatar}
-                  </div>
+                  <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center text-2xl">{p.avatar}</div>
                   <div className="text-left">
                     <span className="font-black text-sm uppercase block leading-tight">{p.name}</span>
                     <span className="text-[9px] opacity-40 font-bold uppercase">
@@ -852,12 +815,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
             ))}
           </div>
           {result && <div className="text-center text-sm font-black text-green-400 mb-4">{result}</div>}
-          <button
-            onClick={onExit}
-            className="w-full py-5 rounded-3xl font-black text-xl bg-yellow-500 text-black uppercase shadow-2xl active:translate-y-1 transition-all"
-          >
-            Back to Home
-          </button>
+          <button onClick={onExit} className="w-full py-5 rounded-3xl font-black text-xl bg-yellow-500 text-black uppercase shadow-2xl active:translate-y-1 transition-all">Back to Home</button>
         </Overlay>
       )}
 
@@ -870,7 +828,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
           <div>sub: {String(syncDebug.subscriptionId || 'NA')}</div>
           <div>pump: {String(syncDebug.eventPumpRunning)} inflight: {String(syncDebug.eventPumpInFlight)} empty: {syncDebug.emptyEventLoops}</div>
-          <div>animQ: {animQueueRef.current.length} anim: {String(isAnimatingRef.current)} rTrick: {renderTrick.length} clearing: {String(clearingTrickWinner)}</div>
+          <div>anim: {String(isAnimatingRef.current)} shown: {shownCountRef.current} rTrick: {renderTrick.length} opt: {optimisticCardId || 'none'}</div>
           <div className="text-[9px] text-yellow-400 font-bold mt-2 mb-1">— LOG ({debugLines.length}) —</div>
           <div className="max-h-[30vh] overflow-auto text-[8px] leading-[12px] text-cyan-300/90">
             {debugLines.map((line, i) => (
