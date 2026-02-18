@@ -23,6 +23,9 @@ export class MultiplayerService {
   private static readonly EVENT_PUMP_FAST_MS = 35;
   private static readonly EVENT_PUMP_IDLE_MS = 110;
   private static readonly EVENT_PUMP_ERROR_MS = 220;
+  private static readonly EVENT_PUMP_WAITING_MS = 800;  // Poll slower when WAITING (saves API calls)
+  private static readonly EMPTY_LOOPS_RESYNC_WAITING = 3; // Resync after 3 empty loops (~2.4s) when WAITING
+  private static readonly EMPTY_LOOPS_RESYNC_OTHER = 10;  // Resync after 10 empty loops when in other phases
   private static readonly DEBUG_SYNC = true;
 
   private async ensureApi() {
@@ -245,16 +248,32 @@ export class MultiplayerService {
             } catch {}
           }
           this.emptyEventLoops += 1;
+          const isWaiting = this.state && this.state.status === 'WAITING';
+          const threshold = isWaiting
+            ? MultiplayerService.EMPTY_LOOPS_RESYNC_WAITING
+            : MultiplayerService.EMPTY_LOOPS_RESYNC_OTHER;
           if (
-            this.emptyEventLoops >= 10 &&
+            this.emptyEventLoops >= threshold &&
             this.state &&
-            (this.state.status === 'WAITING' || this.state.phase === 'BIDDING' || this.state.phase === 'PASSING')
+            (isWaiting || this.state.phase === 'BIDDING' || this.state.phase === 'PASSING')
           ) {
             this.emptyEventLoops = 0;
             try {
+              const prevStatus = this.state.status;
+              const prevRevision = this.state.revision;
               await this.resyncSnapshot();
               this.notify([]);
-              if (this.state.status === 'WAITING') {
+              // If status changed from WAITING, the game started!
+              if (prevStatus === 'WAITING' && this.state.status !== 'WAITING') {
+                if (MultiplayerService.DEBUG_SYNC) {
+                  console.log('[OnlineSync] WAITING→STARTED detected via resync', {
+                    oldRev: prevRevision,
+                    newRev: this.state.revision,
+                    newStatus: this.state.status,
+                    newPhase: this.state.phase,
+                  });
+                }
+              } else if (isWaiting) {
                 await this.tryWaitingRecovery();
               }
             } catch {}
@@ -263,7 +282,13 @@ export class MultiplayerService {
           this.emptyEventLoops = 0;
         }
         if (this.eventPumpRunning) {
-          this.eventPumpTimer = window.setTimeout(tick, events.length > 0 ? MultiplayerService.EVENT_PUMP_FAST_MS : MultiplayerService.EVENT_PUMP_IDLE_MS);
+          const isWaitingNow = this.state && this.state.status === 'WAITING';
+          const nextDelay = events.length > 0
+            ? MultiplayerService.EVENT_PUMP_FAST_MS
+            : isWaitingNow
+              ? MultiplayerService.EVENT_PUMP_WAITING_MS
+              : MultiplayerService.EVENT_PUMP_IDLE_MS;
+          this.eventPumpTimer = window.setTimeout(tick, nextDelay);
         }
       } catch {
         try {

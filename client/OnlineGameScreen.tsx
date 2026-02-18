@@ -83,6 +83,21 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     return () => window.clearTimeout(timeout);
   }, [state?.revision, state?.turnDeadlineMs, state?.turnIndex, state?.status, state?.phase]);
 
+  // ---------- WAITING state aggressive polling ----------
+  // When stuck in WAITING, do a full snapshot sync every 2s to detect game start ASAP
+  useEffect(() => {
+    if (!state || state.status !== 'WAITING') return;
+    const interval = window.setInterval(async () => {
+      try {
+        const next = await serviceRef.current.syncSnapshot();
+        if (next && next.status !== 'WAITING') {
+          setState({ ...next });
+        }
+      } catch {}
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [state?.status]);
+
   // ---------- Clock for timer UI ----------
   useEffect(() => {
     const timer = window.setInterval(() => setClockMs(Date.now()), 100);

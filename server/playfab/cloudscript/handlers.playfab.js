@@ -144,11 +144,37 @@ function loadMatchChunked(matchId) {
 }
 
 function getJoinMarker(matchId) {
-  return titleDataGet('match_join_' + matchId);
+  // Primary: TitleData (may have replication lag)
+  var fromTitle = titleDataGet('match_join_' + matchId);
+  if (fromTitle && fromTitle.seat2PlayFabId) return fromTitle;
+  // Fallback: read from owner's UserReadOnlyData (strongly consistent per-player)
+  try {
+    var ownerRef = titleDataGet('match_owner_' + matchId);
+    var ownerId = ownerRef && ownerRef.ownerPlayFabId;
+    if (ownerId) {
+      var ud = server.GetUserReadOnlyData({ PlayFabId: ownerId, Keys: ['join_' + matchId] });
+      var raw = ud && ud.Data && ud.Data['join_' + matchId] && ud.Data['join_' + matchId].Value;
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && parsed.seat2PlayFabId) return parsed;
+      }
+    }
+  } catch (e) {}
+  return fromTitle;
 }
 
 function setJoinMarker(matchId, marker) {
   titleDataSet('match_join_' + matchId, marker || {});
+  // Also write to owner's UserReadOnlyData for strong consistency
+  try {
+    var ownerRef = titleDataGet('match_owner_' + matchId);
+    var ownerId = ownerRef && ownerRef.ownerPlayFabId;
+    if (ownerId) {
+      var data = {};
+      data['join_' + matchId] = JSON.stringify(marker || {});
+      server.UpdateUserReadOnlyData({ PlayFabId: ownerId, Data: data });
+    }
+  } catch (e) {}
 }
 
 function applyJoinMarker(match) {
@@ -1183,6 +1209,7 @@ function getMatchOnce(matchId, context) {
   var cached = cache.matches[matchId] || null;
   var pid = getCurrentPlayerId(context);
   var newest = cached;
+  var resolvedOwnerId = null;
 
   function pickNewest(candidate) {
     if (!candidate) return;
@@ -1191,6 +1218,7 @@ function getMatchOnce(matchId, context) {
     }
   }
 
+  // 1. Read from calling player's own UserReadOnlyData (strongly consistent)
   try {
     var ud = server.GetUserReadOnlyData({ PlayFabId: pid, Keys: ['match_' + matchId] });
     var raw = ud && ud.Data && ud.Data['match_' + matchId] && ud.Data['match_' + matchId].Value;
@@ -1199,12 +1227,12 @@ function getMatchOnce(matchId, context) {
     }
   } catch (e) {}
 
-  // Fallback: read from owner's read-only data to avoid relying on large TitleData snapshots.
+  // 2. Read from match owner's UserReadOnlyData (strongly consistent, covers cross-player writes)
   try {
     var ownerRef = titleDataGet('match_owner_' + matchId);
-    var ownerId = ownerRef && ownerRef.ownerPlayFabId;
-    if (ownerId) {
-      var oud = server.GetUserReadOnlyData({ PlayFabId: ownerId, Keys: ['match_' + matchId] });
+    resolvedOwnerId = ownerRef && ownerRef.ownerPlayFabId;
+    if (resolvedOwnerId && resolvedOwnerId !== pid) {
+      var oud = server.GetUserReadOnlyData({ PlayFabId: resolvedOwnerId, Keys: ['match_' + matchId] });
       var oraw = oud && oud.Data && oud.Data['match_' + matchId] && oud.Data['match_' + matchId].Value;
       if (oraw) {
         pickNewest(JSON.parse(oraw));
@@ -1212,6 +1240,21 @@ function getMatchOnce(matchId, context) {
     }
   } catch (e) {}
 
+  // 3. Read from seat 2 player's data (the joiner — they also get the match written to their data)
+  if (newest && newest.players && newest.players[2]) {
+    var seat2Id = newest.players[2].playFabId;
+    if (seat2Id && isRealHumanPlayerId(seat2Id) && seat2Id !== pid && seat2Id !== resolvedOwnerId) {
+      try {
+        var s2d = server.GetUserReadOnlyData({ PlayFabId: seat2Id, Keys: ['match_' + matchId] });
+        var s2raw = s2d && s2d.Data && s2d.Data['match_' + matchId] && s2d.Data['match_' + matchId].Value;
+        if (s2raw) {
+          pickNewest(JSON.parse(s2raw));
+        }
+      } catch (e) {}
+    }
+  }
+
+  // 4. Fallback: TitleData (may have replication lag)
   var loadedChunked = loadMatchChunked(matchId);
   pickNewest(loadedChunked);
   var loaded = titleDataGet('match_' + matchId);
