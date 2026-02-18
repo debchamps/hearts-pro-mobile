@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar, CardView, Overlay } from '../SharedComponents';
 import { GameType, Player } from '../types';
-import { MultiplayerService, getDebugLines } from './online/network/multiplayerService';
+import { MultiplayerService, getDebugLines, getFullDebugLog } from './online/network/multiplayerService';
 import { MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
@@ -821,8 +821,33 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
       {/* DEBUG OVERLAY */}
       {showDebugOverlay && (
-        <div className="absolute left-2 right-2 top-[calc(var(--safe-top)+3.25rem)] z-[300] bg-black/90 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-h-[55vh] overflow-auto">
-          <div className="text-[9px] text-yellow-400 font-bold mb-1">— STATE —</div>
+        <div className="absolute left-2 right-2 top-[calc(var(--safe-top)+3.25rem)] z-[300] bg-black/93 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-h-[60vh] overflow-auto">
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[9px] text-yellow-400 font-bold">— STATE —</span>
+            <button
+              className="px-2 py-0.5 bg-cyan-700/60 text-cyan-100 rounded text-[8px] font-bold active:bg-cyan-600"
+              onClick={() => {
+                const full = getFullDebugLog();
+                const stateInfo = `match:${syncDebug.matchId} seat:${syncDebug.seat} rev:${syncDebug.revision} evt:${syncDebug.lastEventId} status:${syncDebug.status} phase:${syncDebug.phase} turn:${syncDebug.turnIndex} sub:${syncDebug.subscriptionId || 'NA'} pump:${syncDebug.eventPumpRunning} game:${gameType}`;
+                const text = `--- DEBUG LOG ---\n${stateInfo}\n\n${full}`;
+                try {
+                  navigator.clipboard.writeText(text);
+                  showMessage('Log copied!', 1200);
+                } catch {
+                  // Fallback: create a textarea and select it
+                  const ta = document.createElement('textarea');
+                  ta.value = text;
+                  ta.style.position = 'fixed';
+                  ta.style.left = '-9999px';
+                  document.body.appendChild(ta);
+                  ta.select();
+                  document.execCommand('copy');
+                  document.body.removeChild(ta);
+                  showMessage('Log copied!', 1200);
+                }
+              }}
+            >COPY ALL LOGS</button>
+          </div>
           <div>match: {String(syncDebug.matchId || 'NA')}</div>
           <div>seat: {syncDebug.seat} rev: {syncDebug.revision} evt: {syncDebug.lastEventId}</div>
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
@@ -830,7 +855,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           <div>pump: {String(syncDebug.eventPumpRunning)} inflight: {String(syncDebug.eventPumpInFlight)} empty: {syncDebug.emptyEventLoops}</div>
           <div>anim: {String(isAnimatingRef.current)} shown: {shownCountRef.current} rTrick: {renderTrick.length} opt: {optimisticCardId || 'none'}</div>
           <div className="text-[9px] text-yellow-400 font-bold mt-2 mb-1">— LOG ({debugLines.length}) —</div>
-          <div className="max-h-[30vh] overflow-auto text-[8px] leading-[12px] text-cyan-300/90">
+          <div className="max-h-[35vh] overflow-auto text-[8px] leading-[12px] text-cyan-300/90">
             {debugLines.map((line, i) => (
               <div key={i} className={line.includes('ERR') ? 'text-red-400' : line.includes('OK') ? 'text-green-400' : ''}>{line}</div>
             ))}
