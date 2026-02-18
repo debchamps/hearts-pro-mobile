@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar, CardView, Overlay } from '../SharedComponents';
 import { GameType, Player } from '../types';
-import { MultiplayerService } from './online/network/multiplayerService';
+import { MultiplayerService, getDebugLines } from './online/network/multiplayerService';
 import { MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
@@ -27,6 +27,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const lastCompletedAtRef = useRef<number>(0);
   const [selectedPassIds, setSelectedPassIds] = useState<string[]>([]);
   const [dragInfo, setDragInfo] = useState<{ id: string; startY: number; currentY: number } | null>(null);
+  const [debugLines, setDebugLines] = useState<string[]>([]);
 
   // ---------- Init & Subscription ----------
   useEffect(() => {
@@ -110,6 +111,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     const timer = window.setTimeout(() => setDebugTapCount(0), 1200);
     return () => window.clearTimeout(timer);
   }, [debugTapCount]);
+
+  // ---------- Debug log refresh (when overlay visible) ----------
+  useEffect(() => {
+    if (!showDebugOverlay) return;
+    // Immediately read current lines
+    setDebugLines([...getDebugLines()]);
+    // Refresh every 500ms while overlay is visible
+    const timer = window.setInterval(() => setDebugLines([...getDebugLines()]), 500);
+    return () => window.clearInterval(timer);
+  }, [showDebugOverlay]);
 
   const showMessage = (text: string, ms = 1800) => {
     setMessage(text);
@@ -700,12 +711,19 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
       {/* DEBUG OVERLAY */}
       {showDebugOverlay && (
-        <div className="absolute left-2 top-[calc(var(--safe-top)+3.25rem)] z-[300] bg-black/85 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-w-[95vw] max-h-[45vh] overflow-auto">
+        <div className="absolute left-2 right-2 top-[calc(var(--safe-top)+3.25rem)] z-[300] bg-black/90 border border-cyan-400/60 rounded-lg px-3 py-2 text-[10px] leading-4 font-mono text-cyan-200 max-h-[55vh] overflow-auto">
+          <div className="text-[9px] text-yellow-400 font-bold mb-1">— STATE —</div>
           <div>match: {String(syncDebug.matchId || 'NA')}</div>
           <div>seat: {syncDebug.seat} rev: {syncDebug.revision} evt: {syncDebug.lastEventId}</div>
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
           <div>sub: {String(syncDebug.subscriptionId || 'NA')}</div>
           <div>pump: {String(syncDebug.eventPumpRunning)} inflight: {String(syncDebug.eventPumpInFlight)} empty: {syncDebug.emptyEventLoops}</div>
+          <div className="text-[9px] text-yellow-400 font-bold mt-2 mb-1">— LOG ({debugLines.length}) —</div>
+          <div className="max-h-[30vh] overflow-auto text-[8px] leading-[12px] text-cyan-300/90">
+            {debugLines.map((line, i) => (
+              <div key={i} className={line.includes('ERR') ? 'text-red-400' : line.includes('OK') ? 'text-green-400' : ''}>{line}</div>
+            ))}
+          </div>
           <div className="text-[9px] text-cyan-400/80 mt-1">tap title 5x to hide</div>
         </div>
       )}
