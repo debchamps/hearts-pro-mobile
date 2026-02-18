@@ -66,9 +66,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     };
   }, [gameType]);
 
-  // ---------- Turn Timeout ----------
+  // ---------- Turn Timeout (covers PLAYING, BIDDING, and PASSING phases) ----------
   useEffect(() => {
-    if (!state || state.status !== 'PLAYING' || state.phase !== 'PLAYING') return;
+    if (!state || state.status !== 'PLAYING') return;
+    // Fire timeout for PLAYING, BIDDING, and PASSING phases
+    if (state.phase !== 'PLAYING' && state.phase !== 'BIDDING' && state.phase !== 'PASSING') return;
     const turnPlayer = state.players?.[state.turnIndex ?? 0];
     if (!turnPlayer) return;
     const delay = Math.max(0, (state.turnDeadlineMs || 0) - Date.now()) + 50;

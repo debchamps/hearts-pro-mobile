@@ -11,6 +11,7 @@ var DEFAULT_REGION = 'US';
 var DEFAULT_CURRENCY_ID = 'CO';
 var QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
 var RECONNECT_WINDOW_MS = 120000;
+var MATCH_STALE_MS = 90000; // 90 seconds — matches stuck in WAITING are considered stale
 var QUICK_MATCH_QUEUES = {
   HEARTS: 'quickmatch-hearts',
   SPADES: 'quickmatch-spades',
@@ -1331,9 +1332,34 @@ handlers.findMatch = function(args, context) {
       playerId: playerId,
       waitingOwner: waiting.ownerPlayFabId,
       waitingMatchId: waiting.matchId,
-      gameType: gameType
+      gameType: gameType,
+      createdAt: waiting.createdAt
     });
   }
+
+  // Clear stale waiting markers — if a match has been waiting for over MATCH_STALE_MS,
+  // the creator likely left. Start fresh.
+  if (waiting && waiting.matchId && waiting.createdAt && (Date.now() - waiting.createdAt > MATCH_STALE_MS)) {
+    appendSyncDebug(waiting.matchId, 'findMatch.staleExpired', {
+      playerId: playerId,
+      waitingAge: Date.now() - waiting.createdAt,
+      threshold: MATCH_STALE_MS
+    });
+    titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+    waiting = null;
+  }
+
+  // If the waiting marker belongs to the same player, don't try to join our own match.
+  // Clear it and create a fresh one instead to avoid getting stuck in old games.
+  if (waiting && waiting.matchId && waiting.ownerPlayFabId === playerId) {
+    appendSyncDebug(waiting.matchId, 'findMatch.selfWaiting', {
+      playerId: playerId,
+      waitingMatchId: waiting.matchId
+    });
+    titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+    waiting = null;
+  }
+
   if (waiting && waiting.matchId && waiting.ownerPlayFabId && waiting.ownerPlayFabId !== playerId) {
     // Retry getMatch with backoff to handle TitleData eventual consistency.
     var existing = null;
@@ -1377,6 +1403,18 @@ handlers.findMatch = function(args, context) {
           }
         }
       }
+    }
+
+    // If the existing match is no longer in WAITING status, it already started
+    // (possibly from a previous session). Clear the stale marker and fall through.
+    if (existing && existing.status !== 'WAITING') {
+      appendSyncDebug(existing.matchId, 'findMatch.existingNotWaiting', {
+        playerId: playerId,
+        existingStatus: existing.status,
+        existingPhase: existing.phase
+      });
+      titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+      existing = null;
     }
 
     if (existing) {
@@ -1432,7 +1470,7 @@ handlers.findMatch = function(args, context) {
           matchId: current.matchId,
           revision: current.revision
         });
-        return { matchId: current.matchId, seat: 0, revision: current.revision, changed: {} };
+        return { matchId: current.matchId, seat: 0, revision: current.revision, changed: {}, snapshot: deltaFor(current, current) };
       }
     } catch (e) {}
   }
@@ -1688,6 +1726,46 @@ handlers.timeoutMove = function(args, context) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
   var turnSeat = match.turnIndex;
+
+  // Handle timeout during BIDDING phase
+  if (match.phase === 'BIDDING') {
+    autoBid(match, turnSeat);
+    var bidDone = finalizeBidding(match);
+    if (!bidDone) {
+      match.turnIndex = (match.turnIndex + 1) % 4;
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+    }
+    bump(match);
+    EventDispatcher.emit(match, 'BID_SUBMITTED', turnSeat, { bids: match.bids, turnIndex: match.turnIndex, phase: match.phase });
+    if (bidDone) {
+      EventDispatcher.emit(match, 'BIDDING_COMPLETED', turnSeat, { bids: match.bids, phase: match.phase, turnIndex: match.turnIndex });
+    }
+    EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { phase: match.phase, bids: match.bids, turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs });
+    runServerTurnChain(match, match.revision);
+    saveMatch(match, context);
+    return deltaFor(match, buildChangedState(before, match));
+  }
+
+  // Handle timeout during PASSING phase
+  if (match.phase === 'PASSING') {
+    autoSelectPass(match, turnSeat);
+    match.turnIndex = (match.turnIndex + 1) % 4;
+    if ((match.passingSelections[0] || []).length === 3 &&
+        (match.passingSelections[1] || []).length === 3 &&
+        (match.passingSelections[2] || []).length === 3 &&
+        (match.passingSelections[3] || []).length === 3) {
+      finalizePassing(match);
+    } else {
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+    }
+    bump(match);
+    EventDispatcher.emit(match, 'TURN_CHANGED', turnSeat, { phase: match.phase, passingSelections: match.passingSelections, turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs });
+    runServerTurnChain(match, match.revision);
+    saveMatch(match, context);
+    return deltaFor(match, buildChangedState(before, match));
+  }
+
+  // Handle timeout during PLAYING phase
   var isHumanTurn = !isSeatBotOrDisconnected(match, turnSeat);
   if (isHumanTurn && match.gameType === 'CALLBREAK' && match.autoMoveOnTimeoutBySeat[turnSeat] === false) {
     match.players[turnSeat].disconnected = true;

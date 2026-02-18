@@ -253,7 +253,7 @@ export const localOnlineApi: OnlineApi = {
       playerName: input.playerName || 'YOU',
       autoMoveOnTimeout: input.autoMoveOnTimeout,
     });
-    return { matchId: created.matchId, seat: created.seat };
+    return { matchId: created.matchId, seat: created.seat, snapshot: created.snapshot };
   },
 
   async createMatch(input: { gameType: GameType; playerName: string; autoMoveOnTimeout?: boolean }) {
@@ -303,7 +303,16 @@ export const localOnlineApi: OnlineApi = {
 
     // Start bot automation chain
     void runBotTurnChain(matchId);
-    return { matchId, seat: 0 };
+    return {
+      matchId,
+      seat: 0,
+      snapshot: {
+        matchId,
+        revision: store.state.revision,
+        changed: store.state,
+        serverTimeMs: Date.now(),
+      },
+    };
   },
 
   async joinMatch(_input: { matchId: string; playerName: string }) {

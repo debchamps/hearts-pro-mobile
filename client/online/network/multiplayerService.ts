@@ -38,7 +38,7 @@ export class MultiplayerService {
     this.playerName = playerName || 'YOU';
     this.autoMoveOnTimeout = options?.autoMoveOnTimeout !== false;
 
-    const callFindOrCreate = async (retries = 3): Promise<{ matchId: string; seat: number }> => {
+    const callFindOrCreate = async (retries = 3): Promise<{ matchId: string; seat: number; snapshot?: import('../types').GameStateDelta }> => {
       try {
         return api.findMatch
           ? await api.findMatch({ gameType, playerName, autoMoveOnTimeout: options?.autoMoveOnTimeout })
@@ -56,7 +56,27 @@ export class MultiplayerService {
     const created = await callFindOrCreate();
     this.matchId = created.matchId;
     this.seat = created.seat;
-    const delta = await api.getSnapshot({ matchId: created.matchId, seat: created.seat });
+
+    // Use the inline snapshot from findMatch/createMatch if available,
+    // avoiding a separate getSnapshot call that can fail due to TitleData replication lag.
+    if (created.snapshot) {
+      this.state = applyDelta(null, created.snapshot);
+      return this.state;
+    }
+
+    // Fallback: getSnapshot with retry
+    const getSnapshotWithRetry = async (retries = 3, delayMs = 300): Promise<import('../types').GameStateDelta> => {
+      try {
+        return await api.getSnapshot({ matchId: created.matchId, seat: created.seat });
+      } catch (e) {
+        if (retries > 0) {
+          await new Promise((r) => setTimeout(r, delayMs));
+          return getSnapshotWithRetry(retries - 1, delayMs * 2);
+        }
+        throw e;
+      }
+    };
+    const delta = await getSnapshotWithRetry();
     this.state = applyDelta(null, delta);
     return this.state;
   }
@@ -90,12 +110,23 @@ export class MultiplayerService {
     this.listeners.forEach((listener) => listener(this.state!, events));
   }
 
-  private async resyncSnapshot() {
+  private async resyncSnapshot(retries = 2) {
     if (!this.matchId) throw new Error('No active match');
     const api = await this.ensureApi();
-    const snapshot = await api.getSnapshot({ matchId: this.matchId, seat: this.seat });
-    this.state = applyDelta(this.state, snapshot);
-    return this.state!;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const snapshot = await api.getSnapshot({ matchId: this.matchId, seat: this.seat });
+        this.state = applyDelta(this.state, snapshot);
+        return this.state!;
+      } catch (e) {
+        lastError = e as Error;
+        if (attempt < retries) {
+          await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError;
   }
 
   private async tryWaitingRecovery() {
@@ -114,7 +145,11 @@ export class MultiplayerService {
         this.seat = found.seat;
         this.lastEventId = 0;
         this.subscriptionId = null;
-        await this.resyncSnapshot();
+        if (found.snapshot) {
+          this.state = applyDelta(null, found.snapshot);
+        } else {
+          await this.resyncSnapshot();
+        }
         this.notify([]);
       }
     } catch {}

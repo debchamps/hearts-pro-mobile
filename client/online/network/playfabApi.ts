@@ -1,6 +1,6 @@
 import { GameType } from '../../../types';
 import { localOnlineApi } from '../core/serverEmulator';
-import { OnlineApi } from '../types';
+import { GameStateDelta, MatchResult, MatchSubscriptionResult, OnlineApi, ReconnectPayload } from '../types';
 import { clearSession, loginPlayFabWithProvider, PlayFabAuthProvider } from './playfabAuth';
 import { getGoogleIdToken } from './googleAuth';
 import { getDebugAuthMode } from './authMode';
@@ -19,7 +19,7 @@ class PlayFabCloudScriptApi implements OnlineApi {
     this.sessionTicket = options.sessionTicket;
   }
 
-  private async call<T>(functionName: string, payload: unknown): Promise<T> {
+  private async call<T>(functionName: string, payload: unknown, retries = 0): Promise<T> {
     const attempt = async (ticket: string): Promise<Response> => {
       const url = `https://${this.options.titleId}.playfabapi.com/Client/ExecuteCloudScript`;
       return fetch(url, {
@@ -50,25 +50,39 @@ class PlayFabCloudScriptApi implements OnlineApi {
 
     if (!response.ok) {
       const text = await response.text();
+      // Retry on 5xx server errors
+      if (response.status >= 500 && retries < 2) {
+        await new Promise((r) => setTimeout(r, 300 * (retries + 1)));
+        return this.call<T>(functionName, payload, retries + 1);
+      }
       throw new Error(`PlayFab HTTP ${response.status}: ${text}`);
     }
 
     const data = await response.json();
     if (data?.data?.Error) {
       const err = data.data.Error;
+      const errType = err.Error || '';
       const msg = err.Message || 'CloudScript execution failed';
       const stack = err.StackTrace ? `\nStack: ${String(err.StackTrace).slice(0, 700)}` : '';
       const logs = Array.isArray(data?.data?.Logs) && data.data.Logs.length > 0
         ? `\nLogs: ${data.data.Logs.slice(0, 3).map((l: any) => l.Message || JSON.stringify(l)).join(' | ')}`
         : '';
-      throw new Error(`[PlayFab:${functionName}] ${msg}${stack}${logs}`);
+      const fullMsg = `[PlayFab:${functionName}] ${errType} ${msg}${stack}${logs}`;
+
+      // Retry "Match not found" errors once — can be caused by TitleData replication lag
+      if (msg.includes('Match not found') && retries < 2) {
+        await new Promise((r) => setTimeout(r, 500 * (retries + 1)));
+        return this.call<T>(functionName, payload, retries + 1);
+      }
+
+      throw new Error(fullMsg);
     }
 
     return data?.data?.FunctionResult as T;
   }
 
   createLobby(input: { gameType: GameType; region?: string }) {
-    return this.call('createLobby', input);
+    return this.call<{ lobbyId: string }>('createLobby', input);
   }
 
   findMatch(input: {
@@ -78,55 +92,55 @@ class PlayFabCloudScriptApi implements OnlineApi {
     autoMoveOnTimeout?: boolean;
     currentMatchId?: string;
   }) {
-    return this.call('findMatch', input);
+    return this.call<{ matchId: string; seat: number; snapshot?: GameStateDelta }>('findMatch', input);
   }
 
   createMatch(input: { gameType: GameType; playerName: string; autoMoveOnTimeout?: boolean }) {
-    return this.call('createMatch', input);
+    return this.call<{ matchId: string; seat: number; snapshot?: GameStateDelta }>('createMatch', input);
   }
 
   joinMatch(input: { matchId: string; playerName: string }) {
-    return this.call('joinMatch', input);
+    return this.call<{ seat: number }>('joinMatch', input);
   }
 
   submitMove(input: { matchId: string; seat: number; cardId: string; expectedRevision: number }) {
-    return this.call('submitMove', input);
+    return this.call<GameStateDelta>('submitMove', input);
   }
 
   submitPass(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }) {
-    return this.call('submitPass', input);
+    return this.call<GameStateDelta>('submitPass', input);
   }
 
   submitBid(input: { matchId: string; seat: number; bid: number; expectedRevision: number }) {
-    return this.call('submitBid', input);
+    return this.call<GameStateDelta>('submitBid', input);
   }
 
   getSnapshot(input: { matchId: string; seat?: number }) {
-    return this.call('getSnapshot', input);
+    return this.call<GameStateDelta>('getSnapshot', input);
   }
 
   subscribeToMatch(input: { matchId: string; sinceEventId?: number; sinceRevision?: number; seat?: number; subscriptionId?: string }) {
-    return this.call('subscribeToMatch', input);
+    return this.call<MatchSubscriptionResult>('subscribeToMatch', input);
   }
 
   unsubscribeFromMatch(input: { matchId: string; subscriptionId: string }) {
-    return this.call('unsubscribeFromMatch', input);
+    return this.call<{ ok: boolean }>('unsubscribeFromMatch', input);
   }
 
   timeoutMove(input: { matchId: string }) {
-    return this.call('timeoutMove', input);
+    return this.call<GameStateDelta>('timeoutMove', input);
   }
 
   endMatch(input: { matchId: string }) {
-    return this.call('endMatch', input);
+    return this.call<MatchResult>('endMatch', input);
   }
 
   updateCoins(input: { playFabId: string; delta: number }) {
-    return this.call('updateCoins', input);
+    return this.call<{ coins: number }>('updateCoins', input);
   }
 
   reconnect(input: { matchId: string; playFabId: string }) {
-    return this.call('reconnect', input);
+    return this.call<{ seat: number; delta: GameStateDelta }>('reconnect', input);
   }
 }
 

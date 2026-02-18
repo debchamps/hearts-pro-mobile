@@ -88,6 +88,7 @@ export interface BotEngineOutput {
   reason: string;
 }
 
-export interface PublicBotPlayer extends Pick<Player, 'id' | 'score' | 'currentRoundScore' | 'tricksWon' | 'bid' | 'isHuman' | 'teamId'> {
+export interface PublicBotPlayer extends Pick<Player, 'id' | 'score' | 'currentRoundScore' | 'bid' | 'isHuman' | 'teamId'> {
+  tricksWon: number;
   handCount: number;
 }

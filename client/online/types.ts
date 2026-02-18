@@ -130,8 +130,8 @@ export interface OnlineApi {
     playerName?: string;
     autoMoveOnTimeout?: boolean;
     currentMatchId?: string;
-  }): Promise<{ matchId: string; seat: number }>;
-  createMatch(input: { gameType: GameType; playerName: string; autoMoveOnTimeout?: boolean }): Promise<{ matchId: string; seat: number }>;
+  }): Promise<{ matchId: string; seat: number; snapshot?: GameStateDelta }>;
+  createMatch(input: { gameType: GameType; playerName: string; autoMoveOnTimeout?: boolean }): Promise<{ matchId: string; seat: number; snapshot?: GameStateDelta }>;
   joinMatch(input: { matchId: string; playerName: string }): Promise<{ seat: number }>;
   submitMove(input: MoveSubmission): Promise<GameStateDelta>;
   submitPass?(input: { matchId: string; seat: number; cardIds: string[]; expectedRevision: number }): Promise<GameStateDelta>;
