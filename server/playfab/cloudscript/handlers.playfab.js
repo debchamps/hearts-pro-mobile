@@ -1540,6 +1540,73 @@ handlers.findMatch = function(args, context) {
     createdAt: Date.now(),
     snapshot: match
   });
+
+  // ── Race-condition guard: re-read the waiting marker after a short delay. ──
+  // If another player created a match concurrently (both read empty marker),
+  // we may see THEIR marker now. The player whose match was created LATER
+  // should abandon theirs and join the earlier one.
+  var RECHECK_DELAY_MS = 300;
+  var recheckEnd = Date.now() + RECHECK_DELAY_MS;
+  while (Date.now() < recheckEnd) { /* spin-wait for TitleData replication */ }
+  var recheck = titleDataGet(waitKey);
+  if (recheck && recheck.matchId && recheck.matchId !== match.matchId
+      && recheck.ownerPlayFabId && recheck.ownerPlayFabId !== playerId) {
+    // Another player wrote a different waiting marker concurrently!
+    // Try to join THEIR match instead.
+    appendSyncDebug(match.matchId, 'findMatch.raceDetected', {
+      playerId: playerId,
+      ourMatchId: match.matchId,
+      theirMatchId: recheck.matchId,
+      theirOwner: recheck.ownerPlayFabId
+    });
+    var raceExisting = null;
+    try {
+      raceExisting = getMatch(recheck.matchId, context);
+    } catch (e) {
+      // If we can't load their match, try the embedded snapshot in the marker.
+      if (recheck.snapshot && recheck.snapshot.matchId === recheck.matchId) {
+        raceExisting = cloneState(recheck.snapshot);
+        cache.matches[raceExisting.matchId] = raceExisting;
+      }
+    }
+    if (raceExisting && raceExisting.status === 'WAITING'
+        && raceExisting.players[0] && raceExisting.players[0].playFabId !== playerId) {
+      // Join their match as seat 2
+      var beforeRace = cloneState(raceExisting);
+      raceExisting.players[2].playFabId = playerId;
+      raceExisting.players[2].name = args.playerName || 'OPPONENT';
+      raceExisting.players[2].isBot = false;
+      raceExisting.players[2].rankBadge = 'Rookie';
+      raceExisting.players[2].pingMs = 57;
+      setJoinMarker(raceExisting.matchId, {
+        seat2PlayFabId: playerId,
+        seat2Name: raceExisting.players[2].name || args.playerName || 'OPPONENT',
+        at: Date.now()
+      });
+      ensureTracking(raceExisting);
+      raceExisting.autoMoveOnTimeoutBySeat[2] = args.autoMoveOnTimeout !== false;
+      var raceStarted = startMatchIfReady(raceExisting);
+      bump(raceExisting);
+      if (raceStarted) {
+        EventDispatcher.emit(raceExisting, 'MATCH_STARTED', -1, { status: raceExisting.status, phase: raceExisting.phase, turnIndex: raceExisting.turnIndex });
+        EventDispatcher.emit(raceExisting, 'CARDS_DISTRIBUTED', -1, { seed: raceExisting.seed, deck: raceExisting.deck, hands: raceExisting.hands });
+      }
+      EventDispatcher.emit(raceExisting, 'TURN_CHANGED', raceExisting.turnIndex, { turnIndex: raceExisting.turnIndex, phase: raceExisting.phase, turnDeadlineMs: raceExisting.turnDeadlineMs });
+      runServerTurnChain(raceExisting, raceExisting.revision);
+      saveMatch(raceExisting, context);
+      appendSyncDebug(raceExisting.matchId, 'findMatch.raceJoined', {
+        playerId: playerId,
+        seat: 2,
+        revision: raceExisting.revision,
+        status: raceExisting.status,
+        phase: raceExisting.phase,
+        abandonedMatchId: match.matchId
+      });
+      titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+      return { matchId: raceExisting.matchId, seat: 2, revision: raceExisting.revision, changed: buildChangedState(beforeRace, raceExisting), snapshot: deltaFor(raceExisting, raceExisting) };
+    }
+  }
+
   return { matchId: match.matchId, seat: 0, snapshot: deltaFor(match, match) };
 };
 

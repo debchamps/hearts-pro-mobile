@@ -114,31 +114,79 @@ export class MultiplayerService {
     this.matchId = created.matchId;
     this.seat = created.seat;
 
+    const applyResult = (result: { matchId: string; seat: number; snapshot?: GameStateDelta }): MultiplayerGameState => {
+      this.matchId = result.matchId;
+      this.seat = result.seat;
+      if (result.snapshot) {
+        this.state = applyDelta(null, result.snapshot);
+        dlog(`snap OK rev=${this.state.revision} status=${this.state.status} phase=${this.state.phase}`);
+      }
+      if (this.state?.status === 'WAITING') {
+        this.waitingSince = Date.now();
+      } else {
+        this.waitingSince = 0;
+      }
+      return this.state!;
+    };
+
     if (created.snapshot) {
-      this.state = applyDelta(null, created.snapshot);
-      dlog(`snap OK rev=${this.state.revision} status=${this.state.status} phase=${this.state.phase}`);
+      applyResult(created);
+    } else {
+      dlog('no inline snapshot, fallback getSnapshot');
+      const getSnap = async (retries = 3, delayMs = 400): Promise<GameStateDelta> => {
+        try {
+          return await api.getSnapshot({ matchId: created.matchId, seat: created.seat });
+        } catch (e) {
+          dlog(`getSnapshot ERR retries=${retries}: ${((e as Error).message || '').slice(0, 100)}`);
+          if (retries > 0) {
+            await new Promise((r) => setTimeout(r, delayMs));
+            return getSnap(retries - 1, delayMs * 2);
+          }
+          throw e;
+        }
+      };
+      const delta = await getSnap();
+      this.state = applyDelta(null, delta);
+      dlog(`getSnapshot OK rev=${this.state.revision} status=${this.state.status}`);
       if (this.state.status === 'WAITING') this.waitingSince = Date.now();
-      return this.state;
     }
 
-    dlog('no inline snapshot, fallback getSnapshot');
-    const getSnap = async (retries = 3, delayMs = 400): Promise<GameStateDelta> => {
+    // ── Fast early re-check for concurrent-creation race condition ──
+    // If we ended up WAITING at seat 0 (i.e. WE created the match), another player
+    // may have also created a match at nearly the same time. Re-call findMatch
+    // with our currentMatchId after a short delay so the server can merge us.
+    if (this.state?.status === 'WAITING' && this.seat === 0 && api.findMatch) {
+      const EARLY_RECHECK_DELAY_MS = 3000;
+      dlog(`earlyRecheck: WAITING at seat 0, will re-check in ${EARLY_RECHECK_DELAY_MS}ms`);
+      await new Promise((r) => setTimeout(r, EARLY_RECHECK_DELAY_MS));
       try {
-        return await api.getSnapshot({ matchId: created.matchId, seat: created.seat });
-      } catch (e) {
-        dlog(`getSnapshot ERR retries=${retries}: ${((e as Error).message || '').slice(0, 100)}`);
-        if (retries > 0) {
-          await new Promise((r) => setTimeout(r, delayMs));
-          return getSnap(retries - 1, delayMs * 2);
+        const recheck = await api.findMatch({
+          gameType,
+          playerName,
+          autoMoveOnTimeout: options?.autoMoveOnTimeout,
+          currentMatchId: this.matchId,
+        });
+        dlog(`earlyRecheck OK matchId=${recheck.matchId} seat=${recheck.seat} hasSnap=${!!recheck.snapshot}`);
+        if (recheck.matchId !== this.matchId) {
+          // Server gave us a different (better) match — switch to it
+          dlog(`earlyRecheck: switching ${this.matchId} → ${recheck.matchId}`);
+          applyResult(recheck);
+        } else if (recheck.snapshot) {
+          // Same match but may have updated (e.g., someone joined)
+          const recheckState = applyDelta(null, recheck.snapshot);
+          if (recheckState.status !== 'WAITING') {
+            dlog(`earlyRecheck: same match but status now ${recheckState.status}, applying`);
+            this.state = recheckState;
+            this.waitingSince = 0;
+          }
         }
-        throw e;
+      } catch (e) {
+        dlog(`earlyRecheck ERR: ${((e as Error).message || '').slice(0, 120)}`);
+        // Non-fatal — we still have our original match
       }
-    };
-    const delta = await getSnap();
-    this.state = applyDelta(null, delta);
-    dlog(`getSnapshot OK rev=${this.state.revision} status=${this.state.status}`);
-    if (this.state.status === 'WAITING') this.waitingSince = Date.now();
-    return this.state;
+    }
+
+    return this.state!;
   }
 
   getSeat() { return this.seat; }
