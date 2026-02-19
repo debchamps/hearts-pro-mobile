@@ -7,7 +7,9 @@ import { getDebugAuthMode } from './authMode';
 
 // Track which backend is in use (visible in debug overlay)
 let _apiBackend: 'PLAYFAB' | 'LOCAL_EMULATOR' = 'LOCAL_EMULATOR';
+let _apiLoginError: string | null = null;
 export function getApiBackend() { return _apiBackend; }
+export function getApiLoginError() { return _apiLoginError; }
 
 interface PlayFabOptions {
   titleId: string;
@@ -187,14 +189,17 @@ export async function createOnlineApiAsync(): Promise<OnlineApi> {
     const session = await loginPlayFabWithProvider(titleId, provider, resolvedToken, customId);
     console.log('[OnlineApi] ✅ Connected to PlayFab server, titleId:', titleId, 'playFabId:', session.playFabId);
     _apiBackend = 'PLAYFAB';
+    _apiLoginError = null;
     return new PlayFabCloudScriptApi({
       titleId,
       sessionTicket: session.sessionTicket,
       refreshSession,
     });
   } catch (e) {
+    const errMsg = (e instanceof Error ? e.message : String(e)).slice(0, 200);
     console.error('[OnlineApi] ❌ PlayFab login failed, falling back to local emulator:', e);
     _apiBackend = 'LOCAL_EMULATOR';
+    _apiLoginError = errMsg;
     return localOnlineApi;
   }
 }

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Avatar, CardView, Overlay } from '../SharedComponents';
 import { GameType, Player } from '../types';
 import { MultiplayerService, getDebugLines, getFullDebugLog } from './online/network/multiplayerService';
-import { getApiBackend } from './online/network/playfabApi';
+import { getApiBackend, getApiLoginError } from './online/network/playfabApi';
 import { MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
@@ -858,6 +858,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
             >COPY ALL LOGS</button>
           </div>
           <div className={getApiBackend() === 'PLAYFAB' ? 'text-green-400' : 'text-red-400'}>backend: {getApiBackend()}</div>
+          {getApiLoginError() && <div className="text-red-400 text-[7px] break-all">login err: {getApiLoginError()}</div>}
           <div>match: {String(syncDebug.matchId || 'NA')}</div>
           <div>seat: {syncDebug.seat} rev: {syncDebug.revision} evt: {syncDebug.lastEventId}</div>
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
