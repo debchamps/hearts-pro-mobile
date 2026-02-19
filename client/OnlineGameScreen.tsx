@@ -54,6 +54,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   // How many cards are currently shown in the trick area
   const shownCountRef = useRef(0);
 
+  // Guard against React Strict Mode / re-render double-invoking the init useEffect
+  const initStartedRef = useRef(false);
+
   // ===== Derived display state =====
   // We always render from serverState. The animation queue only controls renderTrick/clearingTrickWinner.
   const state = serverState;
@@ -284,6 +287,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   // ---------- Init & Subscription ----------
   useEffect(() => {
+    // Guard: React Strict Mode can double-invoke this effect.
+    // Only the FIRST invocation should call createMatch.
+    if (initStartedRef.current) return;
+    initStartedRef.current = true;
+
     let mounted = true;
     async function init() {
       try {

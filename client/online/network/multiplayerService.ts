@@ -41,6 +41,9 @@ export class MultiplayerService {
   private autoMoveOnTimeout = true;
   private syncTimerId: number | null = null;
 
+  // Guard against concurrent / duplicate createMatch calls (React Strict Mode)
+  private createMatchInFlight = false;
+
   // Track when we entered WAITING so we only try recovery after enough time
   private waitingSince = 0;
   // Count recovery attempts to avoid infinite match creation
@@ -62,6 +65,26 @@ export class MultiplayerService {
   }
 
   async createMatch(gameType: GameType, playerName: string, options?: { autoMoveOnTimeout?: boolean }): Promise<MultiplayerGameState> {
+    // Mutex: reject concurrent calls (e.g. React Strict Mode double-invoking useEffect)
+    if (this.createMatchInFlight) {
+      dlog('createMatch BLOCKED — already in flight (duplicate call ignored)');
+      // Wait for the first call to finish and return its result
+      while (this.createMatchInFlight) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (this.state) return this.state;
+      throw new Error('createMatch: first call failed and no state available');
+    }
+    this.createMatchInFlight = true;
+
+    try {
+      return await this._createMatchInner(gameType, playerName, options);
+    } finally {
+      this.createMatchInFlight = false;
+    }
+  }
+
+  private async _createMatchInner(gameType: GameType, playerName: string, options?: { autoMoveOnTimeout?: boolean }): Promise<MultiplayerGameState> {
     const api = await this.ensureApi();
     this.gameType = gameType;
     this.playerName = playerName || 'YOU';
