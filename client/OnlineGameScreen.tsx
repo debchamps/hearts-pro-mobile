@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Avatar, CardView, Overlay } from '../SharedComponents';
 import { GameType, Player } from '../types';
 import { MultiplayerService, getDebugLines, getFullDebugLog } from './online/network/multiplayerService';
+import { getApiBackend } from './online/network/playfabApi';
 import { MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
@@ -836,7 +837,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               className="px-2 py-0.5 bg-cyan-700/60 text-cyan-100 rounded text-[8px] font-bold active:bg-cyan-600"
               onClick={() => {
                 const full = getFullDebugLog();
-                const stateInfo = `match:${syncDebug.matchId} seat:${syncDebug.seat} rev:${syncDebug.revision} evt:${syncDebug.lastEventId} status:${syncDebug.status} phase:${syncDebug.phase} turn:${syncDebug.turnIndex} sub:${syncDebug.subscriptionId || 'NA'} pump:${syncDebug.eventPumpRunning} game:${gameType}`;
+                const stateInfo = `backend:${getApiBackend()} match:${syncDebug.matchId} seat:${syncDebug.seat} rev:${syncDebug.revision} evt:${syncDebug.lastEventId} status:${syncDebug.status} phase:${syncDebug.phase} turn:${syncDebug.turnIndex} sub:${syncDebug.subscriptionId || 'NA'} pump:${syncDebug.eventPumpRunning} game:${gameType}`;
                 const text = `--- DEBUG LOG ---\n${stateInfo}\n\n${full}`;
                 try {
                   navigator.clipboard.writeText(text);
@@ -856,6 +857,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               }}
             >COPY ALL LOGS</button>
           </div>
+          <div className={getApiBackend() === 'PLAYFAB' ? 'text-green-400' : 'text-red-400'}>backend: {getApiBackend()}</div>
           <div>match: {String(syncDebug.matchId || 'NA')}</div>
           <div>seat: {syncDebug.seat} rev: {syncDebug.revision} evt: {syncDebug.lastEventId}</div>
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>

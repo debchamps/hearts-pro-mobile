@@ -156,44 +156,61 @@ export class MultiplayerService {
     // If we ended up WAITING at seat 0 (i.e. WE created the match), another player
     // may have also created a match at nearly the same time. Re-call findMatch
     // with our currentMatchId after short delays so the server can merge us.
-    // We try twice: at 2s and again at 5s (total 7s before subscription takes over).
+    // IMPORTANT: this runs in the BACKGROUND — createMatch returns immediately
+    // so the UI can show "Waiting for players..." instead of blocking on "Finding Match".
     if (this.state?.status === 'WAITING' && this.seat === 0 && api.findMatch) {
-      const EARLY_RECHECK_DELAYS = [2000, 5000];
-      for (const delay of EARLY_RECHECK_DELAYS) {
-        if (this.state?.status !== 'WAITING') break; // already matched
-        dlog(`earlyRecheck: WAITING at seat 0, will re-check in ${delay}ms`);
-        await new Promise((r) => setTimeout(r, delay));
-        try {
-          const recheck = await api.findMatch({
-            gameType,
-            playerName,
-            autoMoveOnTimeout: options?.autoMoveOnTimeout,
-            currentMatchId: this.matchId,
-          });
-          dlog(`earlyRecheck OK matchId=${recheck.matchId} seat=${recheck.seat} hasSnap=${!!recheck.snapshot}`);
-          if (recheck.matchId !== this.matchId) {
-            // Server gave us a different (better) match — switch to it
-            dlog(`earlyRecheck: switching ${this.matchId} → ${recheck.matchId}`);
-            applyResult(recheck);
-            break; // matched!
-          } else if (recheck.snapshot) {
-            // Same match but may have updated (e.g., someone joined)
-            const recheckState = applyDelta(null, recheck.snapshot);
-            if (recheckState.status !== 'WAITING') {
-              dlog(`earlyRecheck: same match but status now ${recheckState.status}, applying`);
-              this.state = recheckState;
-              this.waitingSince = 0;
-              break; // matched!
-            }
-          }
-        } catch (e) {
-          dlog(`earlyRecheck ERR: ${((e as Error).message || '').slice(0, 120)}`);
-          // Non-fatal — we still have our original match, try next delay
-        }
-      }
+      void this.runEarlyRechecks(api, gameType, playerName, options);
     }
 
     return this.state!;
+  }
+
+  /** Background early re-check loop — runs after createMatch returns WAITING. */
+  private async runEarlyRechecks(
+    api: OnlineApi,
+    gameType: GameType, playerName: string, options?: { autoMoveOnTimeout?: boolean }
+  ) {
+    if (!api.findMatch) return;
+    const EARLY_RECHECK_DELAYS = [2000, 5000];
+    for (const delay of EARLY_RECHECK_DELAYS) {
+      if (this.state?.status !== 'WAITING') break; // already matched
+      dlog(`earlyRecheck: WAITING at seat 0, will re-check in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+      if (this.state?.status !== 'WAITING') break;
+      try {
+        const recheck = await api.findMatch({
+          gameType,
+          playerName,
+          autoMoveOnTimeout: options?.autoMoveOnTimeout,
+          currentMatchId: this.matchId,
+        });
+        dlog(`earlyRecheck OK matchId=${recheck.matchId} seat=${recheck.seat} hasSnap=${!!recheck.snapshot}`);
+        if (recheck.matchId !== this.matchId) {
+          dlog(`earlyRecheck: switching ${this.matchId} → ${recheck.matchId}`);
+          this.matchId = recheck.matchId;
+          this.seat = recheck.seat;
+          if (recheck.snapshot) {
+            this.state = applyDelta(null, recheck.snapshot);
+            dlog(`earlyRecheck snap OK rev=${this.state.revision} status=${this.state.status} phase=${this.state.phase}`);
+          }
+          if (this.state?.status !== 'WAITING') { this.waitingSince = 0; }
+          this.notify([]);
+          await this.tryResubscribe();
+          break;
+        } else if (recheck.snapshot) {
+          const recheckState = applyDelta(null, recheck.snapshot);
+          if (recheckState.status !== 'WAITING') {
+            dlog(`earlyRecheck: same match but status now ${recheckState.status}, applying`);
+            this.state = recheckState;
+            this.waitingSince = 0;
+            this.notify([]);
+            break;
+          }
+        }
+      } catch (e) {
+        dlog(`earlyRecheck ERR: ${((e as Error).message || '').slice(0, 120)}`);
+      }
+    }
   }
 
   getSeat() { return this.seat; }
