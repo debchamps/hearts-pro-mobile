@@ -1404,35 +1404,39 @@ handlers.findMatch = function(args, context) {
   }
 
   if (waiting && waiting.matchId && waiting.ownerPlayFabId && waiting.ownerPlayFabId !== playerId) {
-    // Retry getMatch with backoff to handle TitleData eventual consistency.
+    // Try to load the existing match. Use embedded snapshot FIRST (always available
+    // and avoids TitleData replication lag), then fall back to getMatch.
     var existing = null;
-    var getMatchRetries = 3;
-    var getMatchDelay = 80;
-    while (getMatchRetries > 0) {
-      try {
-        existing = getMatch(waiting.matchId, context);
-        break;
-      } catch (e) {
-        getMatchRetries--;
-        if (getMatchRetries > 0) {
-          appendSyncDebug(waiting.matchId, 'findMatch.getMatchRetry', {
-            playerId: playerId,
-            retriesLeft: getMatchRetries,
-            delayMs: getMatchDelay,
-            error: String(e)
-          });
-          var spinEnd = Date.now() + getMatchDelay;
-          while (Date.now() < spinEnd) { /* spin-wait for TitleData replication */ }
-          getMatchDelay *= 2;
-        } else {
-          // All retries exhausted. Try the embedded snapshot from the waiting marker.
-          if (waiting.snapshot && waiting.snapshot.matchId === waiting.matchId) {
-            appendSyncDebug(waiting.matchId, 'findMatch.usedWaitingSnapshot', {
+
+    // Prefer the embedded snapshot — it was written atomically with the marker
+    // and avoids all eventual-consistency issues.
+    if (waiting.snapshot && waiting.snapshot.matchId === waiting.matchId) {
+      appendSyncDebug(waiting.matchId, 'findMatch.usedWaitingSnapshot', {
+        playerId: playerId,
+        snapshotRevision: waiting.snapshot.revision
+      });
+      existing = cloneState(waiting.snapshot);
+      cache.matches[existing.matchId] = existing;
+    } else {
+      // No embedded snapshot — fall back to getMatch with retries.
+      var getMatchRetries = 3;
+      var getMatchDelay = 80;
+      while (getMatchRetries > 0) {
+        try {
+          existing = getMatch(waiting.matchId, context);
+          break;
+        } catch (e) {
+          getMatchRetries--;
+          if (getMatchRetries > 0) {
+            appendSyncDebug(waiting.matchId, 'findMatch.getMatchRetry', {
               playerId: playerId,
-              snapshotRevision: waiting.snapshot.revision
+              retriesLeft: getMatchRetries,
+              delayMs: getMatchDelay,
+              error: String(e)
             });
-            existing = cloneState(waiting.snapshot);
-            cache.matches[existing.matchId] = existing;
+            var spinEnd = Date.now() + getMatchDelay;
+            while (Date.now() < spinEnd) { /* spin-wait for TitleData replication */ }
+            getMatchDelay *= 2;
           } else {
             // Truly stale — clear marker and fall through to create a fresh match.
             appendSyncDebug(waiting.matchId, 'findMatch.staleWaitingCleared', {
@@ -1506,7 +1510,8 @@ handlers.findMatch = function(args, context) {
           matchId: current.matchId,
           ownerPlayFabId: playerId,
           gameType: gameType,
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          snapshot: current
         });
         appendSyncDebug(current.matchId, 'findMatch.reuseCurrentWaiting', {
           playerId: playerId,
@@ -1516,6 +1521,54 @@ handlers.findMatch = function(args, context) {
         return { matchId: current.matchId, seat: 0, revision: current.revision, changed: {}, snapshot: deltaFor(current, current) };
       }
     } catch (e) {}
+  }
+
+  // ── Pre-creation re-read: check if someone else wrote a waiting marker ──
+  // Between our initial read (which was empty or self-owned) and now, another
+  // player may have created a match. Re-read to catch this.
+  var preCreateWaiting = titleDataGet(waitKey);
+  if (preCreateWaiting && preCreateWaiting.matchId && preCreateWaiting.ownerPlayFabId
+      && preCreateWaiting.ownerPlayFabId !== playerId) {
+    // Another player's marker appeared! Try to join their match.
+    var preExisting = null;
+    if (preCreateWaiting.snapshot && preCreateWaiting.snapshot.matchId === preCreateWaiting.matchId) {
+      preExisting = cloneState(preCreateWaiting.snapshot);
+      cache.matches[preExisting.matchId] = preExisting;
+    } else {
+      try { preExisting = getMatch(preCreateWaiting.matchId, context); } catch (e) {}
+    }
+    if (preExisting && preExisting.status === 'WAITING'
+        && preExisting.players[0] && preExisting.players[0].playFabId !== playerId) {
+      appendSyncDebug(preExisting.matchId, 'findMatch.preCreateJoin', {
+        playerId: playerId,
+        matchId: preExisting.matchId,
+        owner: preExisting.players[0].playFabId
+      });
+      var beforePre = cloneState(preExisting);
+      preExisting.players[2].playFabId = playerId;
+      preExisting.players[2].name = args.playerName || 'OPPONENT';
+      preExisting.players[2].isBot = false;
+      preExisting.players[2].rankBadge = 'Rookie';
+      preExisting.players[2].pingMs = 57;
+      setJoinMarker(preExisting.matchId, {
+        seat2PlayFabId: playerId,
+        seat2Name: preExisting.players[2].name || args.playerName || 'OPPONENT',
+        at: Date.now()
+      });
+      ensureTracking(preExisting);
+      preExisting.autoMoveOnTimeoutBySeat[2] = args.autoMoveOnTimeout !== false;
+      var preStarted = startMatchIfReady(preExisting);
+      bump(preExisting);
+      if (preStarted) {
+        EventDispatcher.emit(preExisting, 'MATCH_STARTED', -1, { status: preExisting.status, phase: preExisting.phase, turnIndex: preExisting.turnIndex });
+        EventDispatcher.emit(preExisting, 'CARDS_DISTRIBUTED', -1, { seed: preExisting.seed, deck: preExisting.deck, hands: preExisting.hands });
+      }
+      EventDispatcher.emit(preExisting, 'TURN_CHANGED', preExisting.turnIndex, { turnIndex: preExisting.turnIndex, phase: preExisting.phase, turnDeadlineMs: preExisting.turnDeadlineMs });
+      runServerTurnChain(preExisting, preExisting.revision);
+      saveMatch(preExisting, context);
+      titleDataSet(waitKey, { matchId: '', ownerPlayFabId: '', gameType: gameType, createdAt: 0 });
+      return { matchId: preExisting.matchId, seat: 2, revision: preExisting.revision, changed: buildChangedState(beforePre, preExisting), snapshot: deltaFor(preExisting, preExisting) };
+    }
   }
 
   var match = newMatch(gameType, args.playerName, playerId);

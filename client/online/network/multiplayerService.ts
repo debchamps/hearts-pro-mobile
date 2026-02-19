@@ -48,9 +48,10 @@ export class MultiplayerService {
   private waitingSince = 0;
   // Count recovery attempts to avoid infinite match creation
   private waitingRecoveryAttempts = 0;
-  private static readonly MAX_RECOVERY_ATTEMPTS = 2;
+  private static readonly MAX_RECOVERY_ATTEMPTS = 3;
   // Minimum time in WAITING before trying recovery (ms)
-  private static readonly WAITING_RECOVERY_DELAY_MS = 20_000;
+  // (earlyRecheck handles the first ~7s, this is the fallback)
+  private static readonly WAITING_RECOVERY_DELAY_MS = 15_000;
 
   private static readonly EVENT_PUMP_FAST_MS = 35;
   private static readonly EVENT_PUMP_IDLE_MS = 110;
@@ -154,35 +155,41 @@ export class MultiplayerService {
     // ── Fast early re-check for concurrent-creation race condition ──
     // If we ended up WAITING at seat 0 (i.e. WE created the match), another player
     // may have also created a match at nearly the same time. Re-call findMatch
-    // with our currentMatchId after a short delay so the server can merge us.
+    // with our currentMatchId after short delays so the server can merge us.
+    // We try twice: at 2s and again at 5s (total 7s before subscription takes over).
     if (this.state?.status === 'WAITING' && this.seat === 0 && api.findMatch) {
-      const EARLY_RECHECK_DELAY_MS = 3000;
-      dlog(`earlyRecheck: WAITING at seat 0, will re-check in ${EARLY_RECHECK_DELAY_MS}ms`);
-      await new Promise((r) => setTimeout(r, EARLY_RECHECK_DELAY_MS));
-      try {
-        const recheck = await api.findMatch({
-          gameType,
-          playerName,
-          autoMoveOnTimeout: options?.autoMoveOnTimeout,
-          currentMatchId: this.matchId,
-        });
-        dlog(`earlyRecheck OK matchId=${recheck.matchId} seat=${recheck.seat} hasSnap=${!!recheck.snapshot}`);
-        if (recheck.matchId !== this.matchId) {
-          // Server gave us a different (better) match — switch to it
-          dlog(`earlyRecheck: switching ${this.matchId} → ${recheck.matchId}`);
-          applyResult(recheck);
-        } else if (recheck.snapshot) {
-          // Same match but may have updated (e.g., someone joined)
-          const recheckState = applyDelta(null, recheck.snapshot);
-          if (recheckState.status !== 'WAITING') {
-            dlog(`earlyRecheck: same match but status now ${recheckState.status}, applying`);
-            this.state = recheckState;
-            this.waitingSince = 0;
+      const EARLY_RECHECK_DELAYS = [2000, 5000];
+      for (const delay of EARLY_RECHECK_DELAYS) {
+        if (this.state?.status !== 'WAITING') break; // already matched
+        dlog(`earlyRecheck: WAITING at seat 0, will re-check in ${delay}ms`);
+        await new Promise((r) => setTimeout(r, delay));
+        try {
+          const recheck = await api.findMatch({
+            gameType,
+            playerName,
+            autoMoveOnTimeout: options?.autoMoveOnTimeout,
+            currentMatchId: this.matchId,
+          });
+          dlog(`earlyRecheck OK matchId=${recheck.matchId} seat=${recheck.seat} hasSnap=${!!recheck.snapshot}`);
+          if (recheck.matchId !== this.matchId) {
+            // Server gave us a different (better) match — switch to it
+            dlog(`earlyRecheck: switching ${this.matchId} → ${recheck.matchId}`);
+            applyResult(recheck);
+            break; // matched!
+          } else if (recheck.snapshot) {
+            // Same match but may have updated (e.g., someone joined)
+            const recheckState = applyDelta(null, recheck.snapshot);
+            if (recheckState.status !== 'WAITING') {
+              dlog(`earlyRecheck: same match but status now ${recheckState.status}, applying`);
+              this.state = recheckState;
+              this.waitingSince = 0;
+              break; // matched!
+            }
           }
+        } catch (e) {
+          dlog(`earlyRecheck ERR: ${((e as Error).message || '').slice(0, 120)}`);
+          // Non-fatal — we still have our original match, try next delay
         }
-      } catch (e) {
-        dlog(`earlyRecheck ERR: ${((e as Error).message || '').slice(0, 120)}`);
-        // Non-fatal — we still have our original match
       }
     }
 
