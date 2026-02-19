@@ -1,6 +1,6 @@
 import { GameType } from '../../../types';
 import { applyDelta } from '../core/matchEngine';
-import { createOnlineApiAsync } from './playfabApi';
+import { createOnlineApiAsync, getApiBackend } from './playfabApi';
 import { GameStateDelta, MatchEvent, MultiplayerGameState, OnlineApi } from '../types';
 
 // ──────────────────────────────────────────────
@@ -91,7 +91,7 @@ export class MultiplayerService {
     this.playerName = playerName || 'YOU';
     this.autoMoveOnTimeout = options?.autoMoveOnTimeout !== false;
 
-    dlog(`createMatch gameType=${gameType} player=${this.playerName}`);
+    dlog(`createMatch gameType=${gameType} player=${this.playerName} backend=${getApiBackend()}`);
 
     const callFindOrCreate = async (retries = 3): Promise<{ matchId: string; seat: number; snapshot?: GameStateDelta }> => {
       try {
