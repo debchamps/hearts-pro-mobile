@@ -10,8 +10,25 @@ import { GameStateDelta, MatchEvent, MatchResult, MatchSubscriptionResult, Multi
 // ────────────────────────────────────────────────
 //  Constants
 // ────────────────────────────────────────────────
-const TIMEOUT_MS = 9000;
+const HUMAN_TIMEOUT_MS = 18000;
+const BOT_TIMEOUT_MS = 900;
+const CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS = 5000;
 const RECONNECT_WINDOW_MS = 30_000; // 30 seconds to rejoin
+
+function getEmulatorTurnTimeout(state: MultiplayerGameState, seat: number): number {
+  const p = state.players[seat];
+  const isBot = !p || p.isBot || p.disconnected;
+  if (isBot) return BOT_TIMEOUT_MS;
+  if (state.gameType === 'CALLBREAK') return HUMAN_TIMEOUT_MS + CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS;
+  return HUMAN_TIMEOUT_MS;
+}
+
+/** After any engine call, patch turnDeadlineMs so it matches the actual next player's timeout */
+function patchDeadline(state: MultiplayerGameState): MultiplayerGameState {
+  if (state.status !== 'PLAYING') return state;
+  state.turnDeadlineMs = Date.now() + getEmulatorTurnTimeout(state, state.turnIndex);
+  return state;
+}
 const MATCH_STALE_MS = 90_000; // 90s waiting match expiry
 const STORAGE_PREFIX = 'emu_';
 const TEAM_BY_SEAT: Record<number, 0 | 1> = { 0: 0, 1: 1, 2: 0, 3: 1 };
@@ -172,7 +189,7 @@ function createWaitingState(matchId: string, gameType: GameType, playerName: str
     phase: 'WAITING',
     passingSelections: { 0: [], 1: [], 2: [], 3: [] },
     passingDirection: getPassingDirection(1),
-    turnDeadlineMs: Date.now() + TIMEOUT_MS,
+    turnDeadlineMs: Date.now() + HUMAN_TIMEOUT_MS,
     dealerIndex: 0,
     serverTimeMs: Date.now(),
   };
@@ -215,7 +232,7 @@ function startMatch(state: MultiplayerGameState): MultiplayerGameState {
     bids: { 0: null, 1: null, 2: null, 3: null },
     passingSelections: { 0: [], 1: [], 2: [], 3: [] },
     passingDirection: getPassingDirection(1),
-    turnDeadlineMs: Date.now() + TIMEOUT_MS,
+    turnDeadlineMs: Date.now() + getEmulatorTurnTimeout(state, initialTurnIndex),
     dealerIndex,
     serverTimeMs: Date.now(),
     revision: state.revision + 1,
@@ -257,7 +274,7 @@ async function runBotTurnChain(matchId: string) {
     if (latest.state.turnIndex !== active.seat) return;
 
     latest.previous = latest.state;
-    latest.state = submitMove(latest.state, active.seat, cardId, TIMEOUT_MS);
+    latest.state = patchDeadline(submitMove(latest.state, active.seat, cardId, HUMAN_TIMEOUT_MS));
 
     const isTrickComplete = latest.state.currentTrick.length === 0;
     emitEvent(latest, isTrickComplete ? 'TRICK_COMPLETED' : 'CARD_PLAYED', active.seat, {
@@ -318,7 +335,7 @@ async function runBotPassingPhase(matchId: string) {
     if (!latest || latest.state.phase !== 'PASSING') return;
 
     latest.previous = latest.state;
-    latest.state = submitPass(latest.state, seat, autoIds, TIMEOUT_MS);
+    latest.state = patchDeadline(submitPass(latest.state, seat, autoIds, HUMAN_TIMEOUT_MS));
 
     if (latest.state.phase === 'PLAYING') {
       emitEvent(latest, 'CARDS_DISTRIBUTED', -1, {
@@ -370,7 +387,7 @@ async function runBotBiddingChain(matchId: string) {
     if (!latest || latest.state.phase !== 'BIDDING' || latest.state.turnIndex !== active.seat) return;
 
     latest.previous = latest.state;
-    latest.state = submitBid(latest.state, active.seat, bid, TIMEOUT_MS);
+    latest.state = patchDeadline(submitBid(latest.state, active.seat, bid, HUMAN_TIMEOUT_MS));
     emitEvent(latest, 'BID_SUBMITTED', active.seat, {
       bids: latest.state.bids,
       phase: latest.state.phase,
@@ -700,7 +717,7 @@ export const localOnlineApi: OnlineApi = {
     if (input.expectedRevision !== store.state.revision) throw new Error('Revision mismatch');
 
     store.previous = store.state;
-    store.state = submitMove(store.state, input.seat, input.cardId, TIMEOUT_MS);
+    store.state = patchDeadline(submitMove(store.state, input.seat, input.cardId, HUMAN_TIMEOUT_MS));
 
     const isTrickComplete = store.state.currentTrick.length === 0;
     emitEvent(store, isTrickComplete ? 'TRICK_COMPLETED' : 'CARD_PLAYED', input.seat, {
@@ -740,7 +757,7 @@ export const localOnlineApi: OnlineApi = {
     if (input.expectedRevision !== store.state.revision) throw new Error('Revision mismatch');
 
     store.previous = store.state;
-    store.state = submitPass(store.state, input.seat, input.cardIds, TIMEOUT_MS);
+    store.state = patchDeadline(submitPass(store.state, input.seat, input.cardIds, HUMAN_TIMEOUT_MS));
 
     if (store.state.phase === 'PLAYING') {
       emitEvent(store, 'CARDS_DISTRIBUTED', input.seat, {
@@ -774,7 +791,7 @@ export const localOnlineApi: OnlineApi = {
     if (input.expectedRevision !== store.state.revision) throw new Error('Revision mismatch');
 
     store.previous = store.state;
-    store.state = submitBid(store.state, input.seat, input.bid, TIMEOUT_MS);
+    store.state = patchDeadline(submitBid(store.state, input.seat, input.bid, HUMAN_TIMEOUT_MS));
     emitEvent(store, 'BID_SUBMITTED', input.seat, {
       bids: store.state.bids,
       phase: store.state.phase,
@@ -867,7 +884,7 @@ export const localOnlineApi: OnlineApi = {
     const store = matches.get(input.matchId);
     if (!store) throw new Error('Match not found');
     store.previous = store.state;
-    store.state = timeoutMove(store.state, TIMEOUT_MS);
+    store.state = patchDeadline(timeoutMove(store.state, HUMAN_TIMEOUT_MS));
     if (store.state.revision !== store.previous.revision) {
       emitEvent(
         store,

@@ -41,6 +41,10 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   // These control what the CENTER AREA shows
   const [renderTrick, setRenderTrick] = useState<TrickPlay[]>([]);
   const [clearingTrickWinner, setClearingTrickWinner] = useState<number | null>(null);
+  // Monotonically increasing counter to give each trick unique DOM keys,
+  // preventing React from reusing nodes whose stale CSS animation state
+  // can "bleed" into the next trick.
+  const trickGenRef = useRef(0);
 
   // Card the human just played optimistically (removed from hand display)
   const [optimisticCardId, setOptimisticCardId] = useState<string | null>(null);
@@ -101,8 +105,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
             // After clear animation, reset trick area
             animTimerRef.current = window.setTimeout(() => {
-              setRenderTrick([]);
+              // Bump trick generation BEFORE setting new state so the next
+              // trick's cards get fresh DOM nodes (prevents stale CSS bleed).
+              trickGenRef.current += 1;
               setClearingTrickWinner(null);
+              setRenderTrick([]);
               shownCountRef.current = 0;
               targetTrickRef.current = [];
               isAnimatingRef.current = false;
@@ -143,8 +150,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         targetCompletedRef.current = null;
 
         animTimerRef.current = window.setTimeout(() => {
-          setRenderTrick([]);
+          trickGenRef.current += 1;
           setClearingTrickWinner(null);
+          setRenderTrick([]);
           shownCountRef.current = 0;
           targetTrickRef.current = [];
           isAnimatingRef.current = false;
@@ -240,15 +248,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
     // Case 3: Server trick count ≤ shown (new trick started, or same trick)
     if (serverTrick.length < shown) {
-      // New trick started — reset
+      // New trick started — bump generation so fresh DOM nodes are created
+      trickGenRef.current += 1;
       targetTrickRef.current = serverTrick;
       shownCountRef.current = 0;
+      setClearingTrickWinner(null);
       if (serverTrick.length > 0) {
         isAnimatingRef.current = true;
         processNextAnimStep();
       } else {
         setRenderTrick([]);
-        setClearingTrickWinner(null);
       }
       return;
     }
@@ -740,7 +749,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               const startPos = [{ x: 0, y: 300 }, { x: 350, y: 0 }, { x: 0, y: -300 }, { x: -350, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
               const winDir = [{ x: 0, y: 500 }, { x: 450, y: 0 }, { x: 0, y: -500 }, { x: -450, y: 0 }][winnerViewSeat] || { x: 0, y: 0 };
               return (
-                <div key={`${t.seat}-${t.card.id}-${idx}`}
+                <div key={`g${trickGenRef.current}-${t.seat}-${t.card.id}-${idx}`}
                   className={`absolute animate-play ${clearingTrickWinner !== null ? 'animate-clear' : ''}`}
                   style={{ '--play-x': `${off.x}px`, '--play-y': `${off.y}px`, '--play-rot': '0deg', '--start-x': `${startPos.x}px`, '--start-y': `${startPos.y}px`, '--clear-x': `${winDir.x}px`, '--clear-y': `${winDir.y}px`, zIndex: 10 + idx } as any}>
                   <CardView card={t.card} size="md" />
