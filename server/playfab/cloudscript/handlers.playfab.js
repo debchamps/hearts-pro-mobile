@@ -1504,21 +1504,46 @@ handlers.findMatch = function(args, context) {
   if (currentMatchId) {
     try {
       var current = getMatch(currentMatchId, context);
-      if (current && current.gameType === gameType && current.status === 'WAITING' && current.players[0] && current.players[0].playFabId === playerId) {
-        // Keep the current waiting room as the player's canonical room.
-        titleDataSet(waitKey, {
-          matchId: current.matchId,
-          ownerPlayFabId: playerId,
-          gameType: gameType,
-          createdAt: Date.now(),
-          snapshot: current
-        });
-        appendSyncDebug(current.matchId, 'findMatch.reuseCurrentWaiting', {
-          playerId: playerId,
-          matchId: current.matchId,
-          revision: current.revision
-        });
-        return { matchId: current.matchId, seat: 0, revision: current.revision, changed: {}, snapshot: deltaFor(current, current) };
+      if (current && current.gameType === gameType) {
+        // Find which seat this player occupies in the current match
+        var currentSeat = -1;
+        for (var si = 0; si < current.players.length; si++) {
+          if (current.players[si] && current.players[si].playFabId === playerId) {
+            currentSeat = si;
+            break;
+          }
+        }
+
+        if (current.status === 'PLAYING' && currentSeat >= 0) {
+          // The match already started (another player joined while we were waiting).
+          // Return the PLAYING match — do NOT create a new one!
+          appendSyncDebug(current.matchId, 'findMatch.reuseCurrentPlaying', {
+            playerId: playerId,
+            matchId: current.matchId,
+            seat: currentSeat,
+            revision: current.revision,
+            status: current.status,
+            phase: current.phase
+          });
+          return { matchId: current.matchId, seat: currentSeat, revision: current.revision, changed: {}, snapshot: deltaFor(current, current) };
+        }
+
+        if (current.status === 'WAITING' && currentSeat === 0) {
+          // Keep the current waiting room as the player's canonical room.
+          titleDataSet(waitKey, {
+            matchId: current.matchId,
+            ownerPlayFabId: playerId,
+            gameType: gameType,
+            createdAt: Date.now(),
+            snapshot: current
+          });
+          appendSyncDebug(current.matchId, 'findMatch.reuseCurrentWaiting', {
+            playerId: playerId,
+            matchId: current.matchId,
+            revision: current.revision
+          });
+          return { matchId: current.matchId, seat: 0, revision: current.revision, changed: {}, snapshot: deltaFor(current, current) };
+        }
       }
     } catch (e) {}
   }

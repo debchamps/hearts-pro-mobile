@@ -279,6 +279,15 @@ export class MultiplayerService {
     if (this.waitingRecoveryInFlight || !this.gameType) return;
     if (!this.matchId || !this.api || !this.api.findMatch) return;
 
+    // CRITICAL: double-check we're actually still WAITING before proceeding.
+    // A fullSync or subscription event may have already transitioned us to PLAYING.
+    if (this.state && this.state.status !== 'WAITING') {
+      dlog('waitingRecovery: state is already ' + this.state.status + ', skipping');
+      this.waitingSince = 0;
+      this.waitingRecoveryAttempts = 0;
+      return;
+    }
+
     // Guard: only try recovery after waiting long enough
     if (!this.waitingSince) return;
     const waitedMs = Date.now() - this.waitingSince;
@@ -308,10 +317,44 @@ export class MultiplayerService {
         autoMoveOnTimeout: this.autoMoveOnTimeout,
         currentMatchId: this.matchId,
       });
+
+      // Re-check after the async call: state may have changed while we were awaiting
+      if (this.state && this.state.status !== 'WAITING') {
+        dlog(`waitingRecovery: state became ${this.state.status} during findMatch, aborting switch`);
+        this.waitingRecoveryInFlight = false;
+        this.waitingSince = 0;
+        this.waitingRecoveryAttempts = 0;
+        return;
+      }
+
       if (found.matchId === this.matchId) {
+        // Same match returned — but check if the snapshot shows it transitioned
+        if (found.snapshot) {
+          const snapState = applyDelta(null, found.snapshot);
+          if (snapState.status !== 'WAITING') {
+            dlog(`waitingRecovery: same match but now ${snapState.status}, applying update`);
+            this.state = snapState;
+            this.waitingSince = 0;
+            this.waitingRecoveryAttempts = 0;
+            this.notify([]);
+            this.waitingRecoveryInFlight = false;
+            return;
+          }
+        }
         dlog(`waitingRecovery: same match returned, still waiting`);
         this.waitingRecoveryInFlight = false;
         return;
+      }
+
+      // Different match returned — only switch if the new match is NOT WAITING
+      // (switching to another WAITING match just creates orphans)
+      if (found.snapshot) {
+        const newState = applyDelta(null, found.snapshot);
+        if (newState.status === 'WAITING') {
+          dlog(`waitingRecovery: new match ${found.matchId} is also WAITING, ignoring`);
+          this.waitingRecoveryInFlight = false;
+          return;
+        }
       }
 
       dlog(`waitingRecovery: new match ${found.matchId} seat=${found.seat}`);
