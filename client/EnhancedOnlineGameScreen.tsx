@@ -149,7 +149,7 @@ export function EnhancedOnlineGameScreen({ gameType, onExit }: { gameType: GameT
         setRenderTrick([]);
         setClearingTrickWinner(null);
         clearTimerRef.current = null;
-      }, 800);
+      }, 2800); // 800ms + 2000ms extra before first move of next trick (online animation / network latency)
       return;
     }
 
@@ -166,7 +166,7 @@ export function EnhancedOnlineGameScreen({ gameType, onExit }: { gameType: GameT
         setRenderTrick([]);
         setClearingTrickWinner(null);
         clearTimerRef.current = null;
-      }, renderTrick.length === 4 ? 800 : 300);
+      }, renderTrick.length === 4 ? 2800 : 300); // 4-card: 800ms + 2000ms for online; 1–3 cards: quick clear
     }
   }, [state?.revision, state?.turnIndex, renderTrick, clearingTrickWinner, state]);
 

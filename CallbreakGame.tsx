@@ -273,7 +273,7 @@ export function CallbreakGame({ initialPlayers, initialState, onExit, soundEnabl
             return { ...prev, players: newPlayers, currentTrick: [], leadSuit: null, turnIndex: winnerCard.playerId, trickHistory: newHistory };
           });
           setClearingTrick(null);
-        }, 850);
+        }, 2850); // 850ms + 2000ms extra before first move of next trick (offline animation)
       }, 800);
     }
   }, [gameState.currentTrick, soundEnabled, gameState.leadSuit, triggerEmoji]);

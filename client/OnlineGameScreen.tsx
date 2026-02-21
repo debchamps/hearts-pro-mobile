@@ -11,10 +11,10 @@ import { getCallbreakAutoMoveOnTimeout } from './online/network/callbreakOnlineP
 import { getOnlineTurnDurationMs } from './online/config';
 import { sortCardsBySuitThenRankAsc } from '../services/cardSort';
 
-// ---------- Animation timing constants (match offline feel) ----------
-const BOT_CARD_DELAY_MS = 500;      // delay between sequential bot card plays (offline uses 450-1000ms)
-const TRICK_PAUSE_MS = 800;          // show completed 4-card trick before clearing (offline: 800ms)
-const TRICK_CLEAR_ANIM_MS = 700;     // clear animation duration (CSS is 650ms, extra 50ms buffer)
+// ---------- Animation timing constants (online: +2s before first move of next trick, +500ms per remote card for network latency) ----------
+const BOT_CARD_DELAY_MS = 1000;     // 500ms + 500ms for network latency (delay between sequential remote card plays)
+const TRICK_PAUSE_MS = 2800;        // 800ms + 2000ms extra before first move of next trick (online animation)
+const TRICK_CLEAR_ANIM_MS = 700;    // clear animation duration (CSS is 650ms, extra 50ms buffer)
 
 type TrickPlay = { seat: number; card: any };
 type CompletedTrick = { trick: TrickPlay[]; winner: number; at: number };
