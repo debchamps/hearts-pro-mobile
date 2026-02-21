@@ -6,9 +6,21 @@ const ENTRY_FEE = 50;
 const REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
 const HUMAN_TIMEOUT_MS = 9000;
 const BOT_TIMEOUT_MS = 900;
+const BOT_NETWORK_LATENCY_MS = 500;       // +500ms for animation/network latency (matches client BOT_CARD_DELAY)
+const FIRST_MOVE_OF_TRICK_EXTRA_MS = 2000; // +2s before first move of next trick (matches client TRICK_PAUSE)
 const CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS = 5000;
 const PASSING_TIMEOUT_MS = 15000;
 const BIDDING_TIMEOUT_MS = 12000;
+
+function getTurnTimeout(match, seat) {
+  const p = match.players && match.players[seat];
+  if (!p) return HUMAN_TIMEOUT_MS;
+  const isBotTurn = !!(p.isBot || p.disconnected);
+  if (!isBotTurn && match.gameType === 'CALLBREAK') {
+    return HUMAN_TIMEOUT_MS + CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS;
+  }
+  return isBotTurn ? (BOT_TIMEOUT_MS + BOT_NETWORK_LATENCY_MS) : HUMAN_TIMEOUT_MS;
+}
 
 // Enhanced state management with proper phase tracking
 function createEnhancedMatch(gameType, playerName, playerId) {
@@ -412,8 +424,8 @@ function completeTrick(match) {
   // Set next turn to winner
   match.turnIndex = winner;
   match.trickLeaderIndex = winner;
-  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, winner);
-  
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, winner) + FIRST_MOVE_OF_TRICK_EXTRA_MS;
+
   EventDispatcher.emit(match, 'TRICK_COMPLETED', winner, {
     winner: winner,
     trickScore: trickScore,

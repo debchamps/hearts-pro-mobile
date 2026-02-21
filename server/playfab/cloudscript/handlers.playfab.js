@@ -6,6 +6,8 @@ var ENTRY_FEE = 50;
 var REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
 var HUMAN_TIMEOUT_MS = 18000;
 var BOT_TIMEOUT_MS = 900;
+var BOT_NETWORK_LATENCY_MS = 500;       // +500ms for animation/network latency (matches client BOT_CARD_DELAY)
+var FIRST_MOVE_OF_TRICK_EXTRA_MS = 2000; // +2s before first move of next trick (matches client TRICK_PAUSE)
 var CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS = 5000;
 var DEFAULT_REGION = 'US';
 var DEFAULT_CURRENCY_ID = 'CO';
@@ -398,7 +400,7 @@ function getTurnTimeout(match, seat) {
   if (!isBotTurn && match.gameType === 'CALLBREAK') {
     return HUMAN_TIMEOUT_MS + CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS;
   }
-  return isBotTurn ? BOT_TIMEOUT_MS : HUMAN_TIMEOUT_MS;
+  return isBotTurn ? (BOT_TIMEOUT_MS + BOT_NETWORK_LATENCY_MS) : HUMAN_TIMEOUT_MS;
 }
 
 function compareHandCards(a, b) {
@@ -1074,7 +1076,7 @@ function applyMove(match, seat, cardId, allowFallback) {
   match.leadSuit = null;
   match.turnIndex = winner;
   match.trickLeaderIndex = winner;
-  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex);
+  match.turnDeadlineMs = Date.now() + getTurnTimeout(match, match.turnIndex) + FIRST_MOVE_OF_TRICK_EXTRA_MS;
 
   if ((match.hands[0] || []).length === 0) {
     match.status = 'COMPLETED';
