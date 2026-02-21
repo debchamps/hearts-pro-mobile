@@ -201,8 +201,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       // But update targets so the animation chain picks them up
       if (serverTrick.length > 0) {
         targetTrickRef.current = serverTrick;
-      }
-      if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
+        // New trick started — do not animate its cards to previous winner
+        targetCompletedRef.current = null;
+      } else if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
         targetCompletedRef.current = serverCompleted;
       }
       pendingServerRef.current = null; // clear; we already merged into targets
@@ -215,15 +216,17 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     // Case 1: Server has a completed trick we haven't processed
     if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
       if (serverTrick.length > 0) {
-        // Trick in progress (server has partial trick + a new completed trick from a previous trick?)
-        // This shouldn't normally happen, but handle gracefully
+        // New trick has started (server sends both currentTrick + lastCompletedTrick).
+        // Show the new trick's cards — do NOT animate them to the previous winner.
         targetTrickRef.current = serverTrick;
+        targetCompletedRef.current = null;
+        lastProcessedCompletedAtRef.current = serverCompleted.at; // avoid re-processing
       } else {
         // currentTrick is empty, but lastCompletedTrick is new.
-        // Show the completed trick cards, then clear.
+        // Show the completed trick cards, then clear to winner.
         targetTrickRef.current = serverCompleted.trick;
+        targetCompletedRef.current = serverCompleted;
       }
-      targetCompletedRef.current = serverCompleted;
       // Start from where we left off (or 0 if trick was already cleared)
       if (shown > 0 && shown <= targetTrickRef.current.length) {
         // Some cards already shown from optimistic/previous state
@@ -284,8 +287,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       const serverCompleted = (serverState as any).lastCompletedTrick as CompletedTrick | null;
       if (serverTrick.length > targetTrickRef.current.length) {
         targetTrickRef.current = serverTrick;
-      }
-      if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
+        targetCompletedRef.current = null; // new trick started — do not animate to previous winner
+      } else if (serverCompleted && serverCompleted.at > lastProcessedCompletedAtRef.current) {
         targetCompletedRef.current = serverCompleted;
       }
       return;

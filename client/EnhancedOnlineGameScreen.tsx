@@ -154,13 +154,19 @@ export function EnhancedOnlineGameScreen({ gameType, onExit }: { gameType: GameT
     }
 
     if (renderTrick.length > 0 && clearingTrickWinner === null) {
-      const winner = typeof state.turnIndex === 'number' ? state.turnIndex : 0;
-      setClearingTrickWinner(winner);
+      // Fallback: we have cards but server says empty and no new lastCompletedTrick.
+      // Only animate to winner if we have 4 cards (a full completed trick).
+      // With 1–3 cards this could be the first card(s) of the next trick — do not
+      // animate those to the previous winner (turnIndex).
+      if (renderTrick.length === 4) {
+        const winner = typeof state.turnIndex === 'number' ? state.turnIndex : 0;
+        setClearingTrickWinner(winner);
+      }
       clearTimerRef.current = window.setTimeout(() => {
         setRenderTrick([]);
         setClearingTrickWinner(null);
         clearTimerRef.current = null;
-      }, 800);
+      }, renderTrick.length === 4 ? 800 : 300);
     }
   }, [state?.revision, state?.turnIndex, renderTrick, clearingTrickWinner, state]);
 
