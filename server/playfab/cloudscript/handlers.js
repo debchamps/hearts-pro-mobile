@@ -1,416 +1,683 @@
 const STARTING_COINS = 1000;
-const ENTRY_FEE = 50;
-const REWARDS = { 1: 100, 2: 75, 3: 25, 4: 0 };
-const TIMEOUT_MS = 5000;
-const DEFAULT_REGION = 'US';
-const DEFAULT_CURRENCY_ID = 'CO';
-const QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
-const RECONNECT_WINDOW_MS = 120000;
-const QUICK_MATCH_QUEUES = {
-  HEARTS: 'quickmatch-hearts',
-  SPADES: 'quickmatch-spades',
-  CALLBREAK: 'quickmatch-callbreak',
+const EVENT_HISTORY_LIMIT = 256;
+const DEFAULT_TIMEOUTS = {
+  PASSING: 15000,
+  BIDDING: 12000,
+  PLAYING: 11000,
+  WAITING: 20000,
 };
-const STAT_KEYS = {
-  COINS: 'coins_co_balance',
-  MMR: 'rank_mmr_global',
-  MATCHES_PLAYED: 'matches_played_total',
-  WINS_TOTAL: 'wins_total',
-  HEARTS_BEST: 'hearts_best_score',
-  SPADES_BEST: 'spades_best_score',
-  CALLBREAK_BEST: 'callbreak_best_score',
-};
+const ENTITY_TYPE = 'title';
+const MATCH_PREFIX = 'match_';
+const MATCH_OBJECT_KEY = 'state';
+const SUITS = ['CLUBS', 'DIAMONDS', 'SPADES', 'HEARTS'];
+const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+const RANK_VALUE = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
+const SUIT_PRIORITY = { CLUBS: 0, DIAMONDS: 1, SPADES: 2, HEARTS: 3 };
+const WAITING_MATCHES = { HEARTS: null, SPADES: null, CALLBREAK: null };
+const SUBSCRIPTIONS = new Map();
+let subscriptionCounter = 0;
 
-const stateStore = {
-  matches: new Map(),
-  lobbies: new Map(),
-  coins: new Map(),
-  stats: new Map(),
-  leaderboard: new Map(),
-  events: new Map(),
-  subscriptions: new Map(),
-};
-
-function ensureEventStream(matchId) {
-  if (!stateStore.events.has(matchId)) {
-    stateStore.events.set(matchId, { nextEventId: 1, events: [] });
+function ensureServerApi() {
+  if (typeof globalThis === 'undefined' || typeof globalThis.server === 'undefined') {
+    throw new Error('PlayFab server API unavailable');
   }
-  return stateStore.events.get(matchId);
+  return globalThis.server;
 }
 
-function cloneState(obj) {
-  return JSON.parse(JSON.stringify(obj));
-}
-
-function emitEvent(match, type, actorSeat = -1, payload = {}) {
-  const stream = ensureEventStream(match.matchId);
-  const evt = {
-    eventId: stream.nextEventId++,
-    type,
-    matchId: match.matchId,
-    revision: match.revision,
-    timestamp: Date.now(),
-    actorSeat,
-    payload: cloneState(payload || {}),
-  };
-  stream.events.push(evt);
-  if (stream.events.length > 200) stream.events.splice(0, stream.events.length - 200);
+function entityIdForMatch(matchId) {
+  return `${MATCH_PREFIX}${matchId}`;
 }
 
 function randomId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function canUsePlayFabServerApi() {
-  return typeof globalThis !== 'undefined' && typeof globalThis.server !== 'undefined';
+function cloneState(obj) {
+  return JSON.parse(JSON.stringify(obj));
 }
 
-function persistMatchSnapshot(match) {
-  if (!canUsePlayFabServerApi()) return;
-  try {
-    globalThis.server.SetTitleData({
-      Key: `match_${match.matchId}`,
-      Value: JSON.stringify(match),
-    });
-  } catch {}
-}
-
-function newMatch(gameType, playerName, playerId) {
-  const now = Date.now();
-  return {
-    matchId: randomId('pfm'),
-    gameType,
-    revision: 1,
-    seed: now,
-    deck: [],
-    players: [
-      { seat: 0, playFabId: playerId, name: playerName || 'YOU', isBot: false, disconnected: false, pingMs: 42, rankBadge: 'Rookie', coins: STARTING_COINS },
-      { seat: 1, playFabId: 'BOT_1', name: 'BOT 1', isBot: true, disconnected: false, pingMs: 10, rankBadge: 'BOT', coins: STARTING_COINS },
-      { seat: 2, playFabId: 'REMOTE_PLAYER', name: 'OPPONENT', isBot: false, disconnected: false, pingMs: 57, rankBadge: 'Rookie', coins: STARTING_COINS },
-      { seat: 3, playFabId: 'BOT_3', name: 'BOT 3', isBot: true, disconnected: false, pingMs: 12, rankBadge: 'BOT', coins: STARTING_COINS },
-    ],
-    hands: { 0: [], 1: [], 2: [], 3: [] },
-    turnIndex: 0,
-    currentTrick: [],
-    trickLeaderIndex: 0,
-    leadSuit: null,
-    scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
-    roundNumber: 1,
-    status: 'PLAYING',
-    turnDeadlineMs: now + TIMEOUT_MS,
-    serverTimeMs: now,
+function seededRandom(seed) {
+  let x = seed % 2147483647;
+  if (x <= 0) x += 2147483646;
+  return () => {
+    x = (x * 16807) % 2147483647;
+    return (x - 1) / 2147483646;
   };
 }
 
-function deltaFor(match) {
+function seededShuffle(items, seed) {
+  const rnd = seededRandom(seed);
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rnd() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function sortCardsBySuitThenRankAsc(cards) {
+  return [...cards].sort((a, b) => {
+    if (a.suit !== b.suit) return SUIT_PRIORITY[a.suit] - SUIT_PRIORITY[b.suit];
+    return a.value - b.value;
+  });
+}
+
+function buildDeck() {
+  const deck = [];
+  SUITS.forEach((suit) => {
+    RANKS.forEach((rank) => {
+      deck.push({
+        id: `${rank}-${suit}`,
+        suit,
+        rank,
+        value: RANK_VALUE[rank],
+        points: suit === 'HEARTS' ? 1 : suit === 'SPADES' && rank === 'Q' ? 13 : 0,
+      });
+    });
+  });
+  return deck;
+}
+
+function getPassingDirection(roundNumber) {
+  const cycle = (roundNumber - 1) % 4;
+  return ['LEFT', 'RIGHT', 'ACROSS', 'NONE'][cycle];
+}
+
+function lowCard(cards) {
+  return cards.reduce((best, card) => {
+    if (!best) return card;
+    if (card.value < best.value) return card;
+    if (card.value === best.value && SUIT_PRIORITY[card.suit] < SUIT_PRIORITY[best.suit]) return card;
+    return best;
+  }, null);
+}
+
+function legalByLead(state, seat) {
+  const hand = state.hands[seat] || [];
+  if (!state.leadSuit) return hand;
+  const sameSuit = hand.filter((c) => c.suit === state.leadSuit);
+  return sameSuit.length > 0 ? sameSuit : hand;
+}
+
+function resolveWinnerWithTrump(trick, leadSuit, trumpSuit) {
+  if (!trick.length) return 0;
+  let winner = trick[0];
+  for (let i = 1; i < trick.length; i += 1) {
+    const current = trick[i];
+    const winnerTrump = trumpSuit ? winner.card.suit === trumpSuit : false;
+    const currentTrump = trumpSuit ? current.card.suit === trumpSuit : false;
+    if (currentTrump && !winnerTrump) {
+      winner = current;
+      continue;
+    }
+    if (winnerTrump === currentTrump) {
+      const compareSuit = winnerTrump ? trumpSuit : leadSuit;
+      if (
+        compareSuit &&
+        current.card.suit === compareSuit &&
+        winner.card.suit === compareSuit &&
+        current.card.value > winner.card.value
+      ) {
+        winner = current;
+      }
+    }
+  }
+  return winner.seat;
+}
+
+const RULES = {
+  HEARTS: {
+    isLegal: (state, seat, card) => legalByLead(state, seat).some((c) => c.id === card.id),
+    getTimeoutMove: (state, seat) => {
+      const legal = legalByLead(state, seat);
+      return lowCard(legal);
+    },
+    resolveTrickWinner: (trick, leadSuit) => resolveWinnerWithTrump(trick, leadSuit, null),
+  },
+  SPADES: {
+    isLegal: (state, seat, card) => legalByLead(state, seat).some((c) => c.id === card.id),
+    getTimeoutMove: (state, seat) => {
+      const legal = legalByLead(state, seat);
+      const nonTrump = legal.filter((c) => c.suit !== 'SPADES');
+      return nonTrump.length > 0 ? lowCard(nonTrump) : lowCard(legal);
+    },
+    resolveTrickWinner: (trick, leadSuit) => resolveWinnerWithTrump(trick, leadSuit, 'SPADES'),
+  },
+  CALLBREAK: {
+    isLegal: (state, seat, card) => legalByLead(state, seat).some((c) => c.id === card.id),
+    getTimeoutMove: (state, seat) => {
+      const legal = legalByLead(state, seat);
+      const spades = legal.filter((c) => c.suit === 'SPADES');
+      return spades.length > 0 ? lowCard(spades) : lowCard(legal);
+    },
+    resolveTrickWinner: (trick, leadSuit) => resolveWinnerWithTrump(trick, leadSuit, 'SPADES'),
+  },
+};
+
+function ensureMatchEvents(match) {
+  if (!Array.isArray(match.events)) match.events = [];
+}
+
+function createEventPayload(match) {
+  const payload = cloneState(match);
+  delete payload.events;
+  return payload;
+}
+
+function emitEvent(match, type, actorSeat = -1) {
+  ensureMatchEvents(match);
+  const nextId = match.events.length ? match.events[match.events.length - 1].eventId + 1 : 1;
+  match.events.push({
+    eventId: nextId,
+    type,
+    matchId: match.matchId,
+    revision: match.version,
+    timestamp: Date.now(),
+    actorSeat,
+    payload: createEventPayload(match),
+  });
+  if (match.events.length > EVENT_HISTORY_LIMIT) {
+    match.events.splice(0, match.events.length - EVENT_HISTORY_LIMIT);
+  }
+}
+
+function latestEventId(match) {
+  if (!match.events || !match.events.length) return 0;
+  return match.events[match.events.length - 1].eventId;
+}
+
+function loadMatch(matchId) {
+  const serverApi = ensureServerApi();
+  const response = serverApi.GetObjects({
+    Entity: { Id: entityIdForMatch(matchId), Type: ENTITY_TYPE },
+    Keys: [MATCH_OBJECT_KEY],
+  });
+  const obj = response.Objects && response.Objects[0];
+  if (!obj || !obj.DataObject) {
+    throw new Error('Match not found');
+  }
+  return { match: obj.DataObject, entityVersion: obj.Version || 0 };
+}
+
+function saveMatch(match, expectedVersion) {
+  const serverApi = ensureServerApi();
+  const response = serverApi.SetObjects({
+    Entity: { Id: entityIdForMatch(match.matchId), Type: ENTITY_TYPE },
+    Objects: [
+      {
+        ObjectName: MATCH_OBJECT_KEY,
+        DataObject: match,
+        Version: expectedVersion,
+      },
+    ],
+  });
+  const saved = response.Objects && response.Objects[0];
+  return saved ? (saved.Version || expectedVersion || 0) : expectedVersion;
+}
+
+function createMatchState(gameType, playerId, playerName, options = {}) {
+  const now = Date.now();
+  const seed = options.seed || now;
+  const deck = seededShuffle(buildDeck(), seed);
+  const hands = { 0: [], 1: [], 2: [], 3: [] };
+  for (let seat = 0; seat < 4; seat += 1) {
+    hands[seat] = sortCardsBySuitThenRankAsc(deck.slice(seat * 13, seat * 13 + 13));
+  }
+
+  const phase = gameType === 'HEARTS'
+    ? 'PASSING'
+    : (gameType === 'SPADES' || gameType === 'CALLBREAK')
+      ? 'BIDDING'
+      : 'PLAYING';
+  const dealerIndex = 0;
+  const initialTurn = phase === 'BIDDING' ? (dealerIndex + 1) % 4 : 0;
+
+  const matchId = randomId('pfm');
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUTS[phase];
+
+  return {
+    matchId,
+    version: 1,
+    gameType,
+    state: 'ACTIVE',
+    status: 'WAITING',
+    phase,
+    roundNumber: 1,
+    seed,
+    players: [
+      { seat: 0, playFabId: playerId, name: playerName || 'YOU', isBot: false, disconnected: false, pingMs: 40 },
+      { seat: 1, playFabId: 'BOT_1', name: 'BOT 1', isBot: true, disconnected: false, pingMs: 10 },
+      { seat: 2, playFabId: 'PENDING_PLAYER', name: 'REMOTE PLAYER', isBot: false, disconnected: false, pingMs: 40 },
+      { seat: 3, playFabId: 'BOT_3', name: 'BOT 3', isBot: true, disconnected: false, pingMs: 10 },
+    ],
+    dealerIndex,
+    turn: initialTurn,
+    turnIndex: initialTurn,
+    trickLeader: 0,
+    leadSuit: null,
+    currentTrick: [],
+    trickWins: { 0: 0, 1: 0, 2: 0, 3: 0 },
+    scores: { 0: 0, 1: 0, 2: 0, 3: 0 },
+    bids: { 0: null, 1: null, 2: null, 3: null },
+    hands,
+    passingSelections: { 0: [], 1: [], 2: [], 3: [] },
+    passingDirection: getPassingDirection(1),
+    passingComplete: { 0: false, 1: false, 2: false, 3: false },
+    bidsComplete: { 0: false, 1: false, 2: false, 3: false },
+    trickHistory: [],
+    lastPlayedCard: null,
+    lastCompletedTrick: null,
+    events: [],
+    lastMoveTime: now,
+    turnDeadlineMs: now + timeoutMs,
+    serverTimeMs: now,
+    timeoutMs,
+    autoMoveOnTimeout: options.autoMoveOnTimeout !== false,
+    passingDirectionHistory: [],
+  };
+}
+
+function persistNewMatch(match) {
+  return saveMatch(match, 0);
+}
+
+function assignRemotePlayer(match, playFabId, name) {
+  const remoteSlot = match.players.find((p) => p.seat === 2);
+  if (!remoteSlot) return;
+  remoteSlot.playFabId = playFabId;
+  remoteSlot.name = name || remoteSlot.name;
+  remoteSlot.isBot = false;
+}
+
+function startMatch(match) {
+  match.status = 'PLAYING';
+  match.state = 'ACTIVE';
+  match.serverTimeMs = Date.now();
+  match.turnDeadlineMs = Date.now() + match.timeoutMs;
+}
+
+function createDelta(match) {
   return {
     matchId: match.matchId,
-    revision: match.revision,
-    changed: match,
-    serverTimeMs: Date.now(),
+    revision: match.version,
+    changed: cloneState(match),
+    serverTimeMs: match.serverTimeMs,
   };
 }
 
-function bump(match) {
-  match.revision += 1;
+function applyMove(match, seat, cardId) {
+  if (match.phase !== 'PLAYING') throw new Error('Match not active');
+  if (seat !== match.turn) throw new Error('Not your turn');
+  const hand = match.hands[seat] || [];
+  const index = hand.findIndex((c) => c.id === cardId);
+  if (index === -1) throw new Error('Card not in hand');
+  const card = hand[index];
+  if (!RULES[match.gameType].isLegal(match, seat, card)) throw new Error('Illegal move');
+
+  match.hands[seat] = hand.filter((_, idx) => idx !== index);
+  match.currentTrick.push({ seat, card });
+  if (!match.leadSuit) match.leadSuit = card.suit;
+  match.lastMoveTime = Date.now();
+  match.lastPlayedCard = { seat, cardId: card.id, timestamp: Date.now() };
+
+  if (match.currentTrick.length < 4) {
+    const next = (seat + 1) % 4;
+    match.turn = next;
+    match.turnIndex = next;
+    match.turnDeadlineMs = Date.now() + match.timeoutMs;
+    return { trickCompleted: false };
+  }
+
+  const winner = RULES[match.gameType].resolveTrickWinner(match.currentTrick, match.leadSuit);
+  const trickScore = match.currentTrick.reduce((sum, play) => sum + (play.card.points || 0), 0);
+  match.trickWins[winner] = (match.trickWins[winner] || 0) + 1;
+  match.scores[winner] = (match.scores[winner] || 0) + trickScore;
+  match.lastCompletedTrick = {
+    trick: [...match.currentTrick],
+    winner,
+    at: Date.now(),
+  };
+  match.trickHistory = [...match.trickHistory, match.lastCompletedTrick];
+  match.currentTrick = [];
+  match.leadSuit = null;
+  match.turn = winner;
+  match.turnIndex = winner;
+  match.turnDeadlineMs = Date.now() + match.timeoutMs;
+
+  const roundComplete = [0, 1, 2, 3].every((seatIndex) => (match.hands[seatIndex] || []).length === 0);
+  if (roundComplete) {
+    match.phase = 'COMPLETED';
+    match.status = 'COMPLETED';
+    match.state = 'ENDED';
+  }
+
+  return { trickCompleted: true, trickWinner: winner, trickScore, roundComplete };
+}
+
+function applyPass(match, seat, cardIds) {
+  if (match.phase !== 'PASSING') throw new Error('Not in passing phase');
+  if (seat !== match.turn) throw new Error('Not your turn to pass');
+  if (!Array.isArray(cardIds) || cardIds.length !== 3) throw new Error('Must pass exactly 3 cards');
+  const hand = match.hands[seat] || [];
+  const missing = cardIds.some((id) => !hand.some((c) => c.id === id));
+  if (missing) throw new Error('Invalid passing selection');
+
+  match.passingSelections[seat] = [...cardIds];
+  match.passingComplete[seat] = true;
+  match.hands[seat] = hand.filter((c) => !cardIds.includes(c.id));
+  const next = (seat + 1) % 4;
+  match.turn = next;
+  match.turnIndex = next;
+  match.turnDeadlineMs = Date.now() + match.timeoutMs;
+
+  const allPassed = Object.values(match.passingComplete).every(Boolean);
+  if (!allPassed) return { passingComplete: false };
+
+  const dir = match.passingDirection || 'LEFT';
+  const passes = {};
+  for (let s = 0; s < 4; s += 1) {
+    const ids = match.passingSelections[s] || [];
+    passes[s] = ids.map((id) => (match.hands[s] || []).find((c) => c.id === id)).filter(Boolean);
+  }
+  for (let s = 0; s < 4; s += 1) {
+    const ids = match.passingSelections[s] || [];
+    match.hands[s] = (match.hands[s] || []).filter((c) => !ids.includes(c.id));
+  }
+  for (let s = 0; s < 4; s += 1) {
+    const target = dir === 'LEFT' ? (s + 1) % 4 : dir === 'RIGHT' ? (s + 3) % 4 : (s + 2) % 4;
+    match.hands[target] = sortCardsBySuitThenRankAsc([...(match.hands[target] || []), ...passes[s]]);
+  }
+    match.phase = 'PLAYING';
+    match.passingSelections = { 0: [], 1: [], 2: [], 3: [] };
+    match.passingComplete = { 0: false, 1: false, 2: false, 3: false };
+    match.turn = match.players.find((p) => (match.hands[p.seat] || []).some((c) => c.id === '2-CLUBS'))?.seat ?? 0;
+    match.turnIndex = match.turn;
+    match.turnDeadlineMs = Date.now() + match.timeoutMs;
+    return { passingComplete: true };
+}
+
+function applyBid(match, seat, bid) {
+  if (match.phase !== 'BIDDING') throw new Error('Not in bidding phase');
+  if (seat !== match.turn) throw new Error('Not your bidding turn');
+  if (typeof bid !== 'number' || bid < 0) throw new Error('Invalid bid');
+
+  match.bids[seat] = bid;
+  match.bidsComplete[seat] = true;
+  const next = (seat + 1) % 4;
+  match.turn = next;
+  match.turnIndex = next;
+  match.turnDeadlineMs = Date.now() + match.timeoutMs;
+
+  const allBid = Object.values(match.bidsComplete).every(Boolean);
+  if (allBid) {
+    match.phase = 'PLAYING';
+    match.turn = (match.dealerIndex + 1) % 4;
+    match.turnIndex = match.turn;
+    match.turnDeadlineMs = Date.now() + match.timeoutMs;
+    return { biddingComplete: true };
+  }
+  return { biddingComplete: false };
+}
+
+function atomicUpdate(matchId, expectedRevision, mutate) {
+  const { match, entityVersion } = loadMatch(matchId);
+  if (expectedRevision !== undefined && match.version !== expectedRevision) {
+    throw new Error('Revision mismatch');
+  }
+  const result = mutate(match) || {};
+  match.version += 1;
   match.serverTimeMs = Date.now();
+  if (Array.isArray(result.events)) {
+    result.events.forEach((evt) => emitEvent(match, evt.type, evt.actorSeat));
+  }
+  saveMatch(match, entityVersion);
   return match;
 }
 
-function assertMatch(matchId) {
-  const m = stateStore.matches.get(matchId);
-  if (!m) throw new Error('Match not found');
-  return m;
-}
-
-function assertLobby(lobbyId) {
-  const l = stateStore.lobbies.get(lobbyId);
-  if (!l) throw new Error('Lobby not found');
-  return l;
-}
-
-function getCoins(playFabId) {
-  return stateStore.coins.get(playFabId) ?? STARTING_COINS;
-}
-
-function setCoins(playFabId, coins) {
-  stateStore.coins.set(playFabId, coins);
-  return coins;
-}
-
-function getStats(playFabId) {
-  if (!stateStore.stats.has(playFabId)) {
-    stateStore.stats.set(playFabId, {
-      [STAT_KEYS.COINS]: STARTING_COINS,
-      [STAT_KEYS.MMR]: 1000,
-      [STAT_KEYS.MATCHES_PLAYED]: 0,
-      [STAT_KEYS.WINS_TOTAL]: 0,
-      [STAT_KEYS.HEARTS_BEST]: 0,
-      [STAT_KEYS.SPADES_BEST]: 0,
-      [STAT_KEYS.CALLBREAK_BEST]: 0,
-    });
+function getInvokerId(args) {
+  if (args && typeof args.playFabId === 'string' && args.playFabId) return args.playFabId;
+  if (args && typeof args.playerId === 'string' && args.playerId) return args.playerId;
+  if (typeof globalThis !== 'undefined' && typeof globalThis.currentPlayerId === 'string' && globalThis.currentPlayerId) {
+    return globalThis.currentPlayerId;
   }
-  return stateStore.stats.get(playFabId);
+  return 'UNKNOWN_PLAYER';
 }
 
-function setStat(playFabId, key, value) {
-  const bag = getStats(playFabId);
-  bag[key] = value;
+function getInvokerName(args) {
+  return (args && args.playerName) || 'REMOTE PLAYER';
 }
 
-function updatePostMatchStats(gameType, player, rank, score, coinsAfter) {
-  if (player.isBot) return;
-  const bag = getStats(player.playFabId);
-  bag[STAT_KEYS.MATCHES_PLAYED] += 1;
-  if (rank === 1) bag[STAT_KEYS.WINS_TOTAL] += 1;
-  bag[STAT_KEYS.COINS] = coinsAfter;
-  bag[STAT_KEYS.MMR] = Math.max(0, bag[STAT_KEYS.MMR] + (rank === 1 ? 20 : rank === 2 ? 10 : rank === 3 ? -5 : -12));
-
-  const bestKey = gameType === 'HEARTS' ? STAT_KEYS.HEARTS_BEST : gameType === 'SPADES' ? STAT_KEYS.SPADES_BEST : STAT_KEYS.CALLBREAK_BEST;
-  bag[bestKey] = Math.max(bag[bestKey], score);
+function createMatchHandler(args) {
+  const invokerId = getInvokerId(args);
+  const match = createMatchState(args.gameType, invokerId, getInvokerName(args), { autoMoveOnTimeout: args.autoMoveOnTimeout });
+  emitEvent(match, 'MATCH_CREATED', 0);
+  persistNewMatch(match);
+  WAITING_MATCHES[match.gameType] = match.matchId;
+  return { matchId: match.matchId, seat: 0, snapshot: createDelta(match) };
 }
 
-export function createMatch(args, context = {}) {
-  const playerId = context?.currentPlayerId || 'LOCAL_PLAYER';
-  const match = newMatch(args.gameType, args.playerName, playerId);
-  setCoins(playerId, getCoins(playerId) - ENTRY_FEE);
-  setStat(playerId, STAT_KEYS.COINS, getCoins(playerId));
-  stateStore.matches.set(match.matchId, match);
-  emitEvent(match, 'MATCH_CREATED', -1, { status: match.status });
-  persistMatchSnapshot(match);
-  return { matchId: match.matchId, seat: 0 };
-}
-
-export function createLobby(args, context = {}) {
-  const playerId = context?.currentPlayerId || 'LOCAL_PLAYER';
-  const lobbyId = randomId('lobby');
+function findMatchHandler(args) {
+  const invokerId = getInvokerId(args);
   const gameType = args.gameType;
-  stateStore.lobbies.set(lobbyId, {
-    lobbyId,
-    gameType,
-    queueName: QUICK_MATCH_QUEUES[gameType] || QUICK_MATCH_QUEUES.HEARTS,
-    ticketTimeoutSec: QUICK_MATCH_TICKET_TIMEOUT_SEC,
-    region: args.region || DEFAULT_REGION,
-    isPublicQuickMatch: true,
-    members: [playerId],
-    createdAt: Date.now(),
-  });
-  return {
-    lobbyId,
-    queueName: QUICK_MATCH_QUEUES[gameType] || QUICK_MATCH_QUEUES.HEARTS,
-    ticketTimeoutSec: QUICK_MATCH_TICKET_TIMEOUT_SEC,
-    region: args.region || DEFAULT_REGION,
-  };
-}
+  if (!gameType) throw new Error('Missing gameType');
 
-export function findMatch(args) {
-  const gameType = args.gameType;
-  const playerId = args.playFabId || 'LOCAL_PLAYER';
-  const queueKey = `${gameType}_WAITING`;
-  const waiting = stateStore.lobbies.get(queueKey);
-
-  if (waiting && waiting.ownerPlayFabId !== playerId) {
-    const existing = stateStore.matches.get(waiting.matchId);
-    if (!existing) {
-      // Stale waiting marker — clear and fall through to create a new match.
-      stateStore.lobbies.delete(queueKey);
-    } else {
-      existing.players[2] = {
-        ...existing.players[2],
-        playFabId: playerId,
-        name: args.playerName || 'OPPONENT',
-        isBot: false,
-        rankBadge: 'Rookie',
-        pingMs: 57,
-      };
-      bump(existing);
-      stateStore.lobbies.delete(queueKey);
-      return { matchId: existing.matchId, seat: 2 };
+  if (args.currentMatchId) {
+    try {
+      const { match } = loadMatch(args.currentMatchId);
+      const seatInfo = match.players.find((p) => p.playFabId === invokerId);
+      if (seatInfo) {
+        return { matchId: match.matchId, seat: seatInfo.seat, snapshot: createDelta(match) };
+      }
+    } catch (e) {
+      // Ignore missing match while recheck is in flight
     }
   }
 
-  const match = newMatch(gameType, args.playerName, playerId);
-  stateStore.matches.set(match.matchId, match);
-  stateStore.lobbies.set(queueKey, {
-    ownerPlayFabId: playerId,
-    matchId: match.matchId,
-    createdAt: Date.now(),
-  });
-  return { matchId: match.matchId, seat: 0 };
-}
-
-export function joinMatch(args) {
-  const match = assertMatch(args.matchId);
-  const seat = 2;
-  match.players[seat].name = args.playerName || match.players[seat].name;
-  bump(match);
-  persistMatchSnapshot(match);
-  return { seat };
-}
-
-export function submitMove(args) {
-  const match = assertMatch(args.matchId);
-  if (match.turnIndex !== args.seat) throw new Error('Not your turn');
-  if (args.expectedRevision !== match.revision) throw new Error('Revision mismatch');
-
-  match.currentTrick.push({ seat: args.seat, card: { id: args.cardId, suit: 'CLUBS', rank: '2', value: 2, points: 0 } });
-  match.turnIndex = (match.turnIndex + 1) % 4;
-  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
-  bump(match);
-  emitEvent(match, 'CARD_PLAYED', args.seat, match);
-  persistMatchSnapshot(match);
-  return deltaFor(match);
-}
-
-export function getSnapshot(args) {
-  const match = assertMatch(args.matchId);
-  return deltaFor(match);
-}
-
-export function getState(args) {
-  return getSnapshot(args);
-}
-
-export function subscribeToMatch(args, context = {}) {
-  const match = assertMatch(args.matchId);
-  const stream = ensureEventStream(match.matchId);
-  if (!stateStore.subscriptions.has(match.matchId)) stateStore.subscriptions.set(match.matchId, {});
-  const bucket = stateStore.subscriptions.get(match.matchId);
-  const requestedId = args.subscriptionId && bucket[args.subscriptionId] ? args.subscriptionId : null;
-  const subscriptionId = requestedId || randomId('sub');
-  if (!requestedId) {
-    bucket[subscriptionId] = { playerId: context?.currentPlayerId || 'LOCAL_PLAYER', createdAt: Date.now() };
+  const queuedMatchId = WAITING_MATCHES[gameType];
+  if (queuedMatchId) {
+    try {
+      const { match, entityVersion } = loadMatch(queuedMatchId);
+      const pendingSeat = match.players[2];
+      if (match.status === 'WAITING' && pendingSeat && (pendingSeat.playFabId === 'PENDING_PLAYER' || pendingSeat.isBot)) {
+        assignRemotePlayer(match, invokerId, getInvokerName(args));
+        startMatch(match);
+        match.version += 1;
+        match.serverTimeMs = Date.now();
+        emitEvent(match, 'MATCH_STARTED', 2);
+        saveMatch(match, entityVersion);
+        WAITING_MATCHES[gameType] = null;
+        return { matchId: match.matchId, seat: 2, snapshot: createDelta(match) };
+      }
+    } catch (e) {
+      // Fall through and create new match
+    }
   }
+
+  return createMatchHandler(args);
+}
+
+function submitMoveHandler(args) {
+  const match = atomicUpdate(args.matchId, args.expectedRevision, (match) => {
+    const moveResult = applyMove(match, args.seat, args.cardId);
+    const events = [{ type: 'CARD_PLAYED', actorSeat: args.seat }];
+    if (moveResult.trickCompleted) {
+      events.push({ type: 'TRICK_COMPLETED', actorSeat: moveResult.trickWinner });
+      if (moveResult.roundComplete) {
+        events.push({ type: 'ROUND_COMPLETED', actorSeat: moveResult.trickWinner });
+        events.push({ type: 'MATCH_COMPLETED', actorSeat: moveResult.trickWinner });
+      }
+    }
+    return { events };
+  });
+  return createDelta(match);
+}
+
+function submitPassHandler(args) {
+  const match = atomicUpdate(args.matchId, args.expectedRevision, (match) => {
+    const passResult = applyPass(match, args.seat, args.cardIds || []);
+    const events = [{ type: 'PASSING_COMPLETED', actorSeat: args.seat }];
+    if (passResult.passingComplete) {
+      events.push({ type: 'CARDS_DISTRIBUTED', actorSeat: args.seat });
+    }
+    return { events };
+  });
+  return createDelta(match);
+}
+
+function submitBidHandler(args) {
+  const match = atomicUpdate(args.matchId, args.expectedRevision, (match) => {
+    const bidResult = applyBid(match, args.seat, args.bid);
+    const events = [{ type: 'BID_SUBMITTED', actorSeat: args.seat }];
+    if (bidResult.biddingComplete) {
+      events.push({ type: 'BIDDING_COMPLETED', actorSeat: args.seat });
+    }
+    return { events };
+  });
+  return createDelta(match);
+}
+
+function getSnapshotHandler(args) {
+  const { match } = loadMatch(args.matchId);
+  return createDelta(match);
+}
+
+function timeoutMoveHandler(args) {
+  const { match } = loadMatch(args.matchId);
+  if (Date.now() < match.turnDeadlineMs) {
+    return createDelta(match);
+  }
+  const updated = atomicUpdate(args.matchId, undefined, (match) => {
+    const events = [];
+    if (match.phase === 'PASSING') {
+      const seat = match.turn;
+      const hand = match.hands[seat] || [];
+      const sorted = [...hand].sort((a, b) => b.value - a.value);
+      const autoIds = sorted.slice(0, 3).map((c) => c.id);
+      applyPass(match, seat, autoIds);
+      events.push({ type: 'PASSING_COMPLETED', actorSeat: seat });
+      events.push({ type: 'CARDS_DISTRIBUTED', actorSeat: seat });
+    } else if (match.phase === 'BIDDING') {
+      const seat = match.turn;
+      applyBid(match, seat, 1);
+      events.push({ type: 'BID_SUBMITTED', actorSeat: seat });
+      events.push({ type: 'BIDDING_COMPLETED', actorSeat: seat });
+    } else {
+      const seat = match.turn;
+      const move = RULES[match.gameType].getTimeoutMove(match, seat);
+      if (move) {
+        const moveResult = applyMove(match, seat, move.id);
+        events.push({ type: 'CARD_PLAYED', actorSeat: seat });
+        if (moveResult.trickCompleted) {
+          events.push({ type: 'TRICK_COMPLETED', actorSeat: moveResult.trickWinner });
+          if (moveResult.roundComplete) {
+            events.push({ type: 'ROUND_COMPLETED', actorSeat: moveResult.trickWinner });
+            events.push({ type: 'MATCH_COMPLETED', actorSeat: moveResult.trickWinner });
+          }
+        }
+      }
+    }
+    return { events };
+  });
+  return createDelta(updated);
+}
+
+function endMatchHandler(args) {
+  const match = atomicUpdate(args.matchId, args.expectedRevision, (match) => {
+    match.phase = 'COMPLETED';
+    match.status = 'COMPLETED';
+    match.state = 'ENDED';
+    return { events: [{ type: 'MATCH_COMPLETED', actorSeat: -1 }] };
+  });
+  return createDelta(match);
+}
+
+function updateCoinsHandler(args) {
+  return { coins: STARTING_COINS };
+}
+
+function reconnectHandler(args) {
+  const { match, entityVersion } = loadMatch(args.matchId);
+  const seat = match.players.find((p) => p.playFabId === args.playFabId)?.seat ?? 0;
+  match.players[seat].disconnected = false;
+  match.lastMoveTime = Date.now();
+  match.version += 1;
+  match.serverTimeMs = Date.now();
+  emitEvent(match, 'PLAYER_RECONNECTED', seat);
+  saveMatch(match, entityVersion);
+  return { seat, delta: createDelta(match) };
+}
+
+function joinMatchHandler(args) {
+  const invokerId = getInvokerId(args);
+  const { match, entityVersion } = loadMatch(args.matchId);
+  const remote = match.players.find((p) => p.seat === 2);
+  if (!remote || remote.playFabId !== 'PENDING_PLAYER') {
+    throw new Error('Match already full');
+  }
+  assignRemotePlayer(match, invokerId, getInvokerName(args));
+  startMatch(match);
+  match.version += 1;
+  match.serverTimeMs = Date.now();
+  emitEvent(match, 'MATCH_STARTED', 2);
+  saveMatch(match, entityVersion);
+  WAITING_MATCHES[match.gameType] = null;
+  return { seat: 2 };
+}
+
+function subscribeToMatchHandler(args) {
+  const { match } = loadMatch(args.matchId);
   const sinceEventId = Number(args.sinceEventId || 0);
   const sinceRevision = Number(args.sinceRevision || 0);
-  const events = stream.events.filter((evt) => evt.eventId > sinceEventId);
-  if (events.length === 0 && sinceRevision < match.revision) {
-    return {
-      subscriptionId,
-      events: [{
-        eventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
-        type: 'TURN_CHANGED',
-        matchId: match.matchId,
-        revision: match.revision,
-        timestamp: Date.now(),
-        actorSeat: typeof match.turnIndex === 'number' ? match.turnIndex : -1,
-        payload: cloneState(match),
-      }],
-      latestEventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
+  const filtered = (match.events || []).filter((evt) => evt.eventId > sinceEventId).map((evt) => cloneState(evt));
+  let events = filtered;
+  if (!events.length && sinceRevision < match.version) {
+    const fallbackId = latestEventId(match);
+    const fallback = {
+      eventId: fallbackId,
+      type: 'TURN_CHANGED',
+      matchId: match.matchId,
+      revision: match.version,
+      timestamp: Date.now(),
+      actorSeat: match.turnIndex ?? -1,
+      payload: createEventPayload(match),
     };
+    events = [fallback];
   }
+  let subId = args.subscriptionId;
+  if (!subId || SUBSCRIPTIONS.get(subId) !== match.matchId) {
+    subId = `${match.matchId}_sub_${++subscriptionCounter}`;
+  }
+  SUBSCRIPTIONS.set(subId, match.matchId);
   return {
-    subscriptionId,
+    subscriptionId: subId,
+    latestEventId: latestEventId(match),
     events,
-    latestEventId: stream.events.length ? stream.events[stream.events.length - 1].eventId : 0,
   };
 }
 
-export function unsubscribeFromMatch(args) {
-  const bucket = stateStore.subscriptions.get(args.matchId) || {};
-  delete bucket[args.subscriptionId];
-  stateStore.subscriptions.set(args.matchId, bucket);
+function unsubscribeFromMatchHandler(args) {
+  if (args && args.subscriptionId) {
+    SUBSCRIPTIONS.delete(args.subscriptionId);
+  }
   return { ok: true };
-}
-
-export function timeoutMove(args) {
-  const match = assertMatch(args.matchId);
-  if (Date.now() < match.turnDeadlineMs) {
-    return {
-      matchId: match.matchId,
-      revision: match.revision,
-      changed: {},
-      serverTimeMs: Date.now(),
-    };
-  }
-
-  match.currentTrick.push({ seat: match.turnIndex, card: { id: '2-CLUBS', suit: 'CLUBS', rank: '2', value: 2, points: 0 } });
-  match.turnIndex = (match.turnIndex + 1) % 4;
-  match.turnDeadlineMs = Date.now() + TIMEOUT_MS;
-  bump(match);
-  emitEvent(match, 'TURN_CHANGED', match.turnIndex, match);
-  persistMatchSnapshot(match);
-  return deltaFor(match);
-}
-
-export function endMatch(args) {
-  const match = assertMatch(args.matchId);
-  match.status = 'COMPLETED';
-  bump(match);
-
-  const standings = Object.keys(match.scores)
-    .map((seat) => ({ seat: Number(seat), score: match.scores[seat] }))
-    .sort((a, b) => b.score - a.score)
-    .map((row, idx) => ({ ...row, rank: idx + 1 }));
-
-  const rewards = standings.map((row) => ({ seat: row.seat, coinsDelta: REWARDS[row.rank] - ENTRY_FEE }));
-  rewards.forEach((reward) => {
-    const p = match.players[reward.seat];
-    const next = getCoins(p.playFabId) + reward.coinsDelta;
-    setCoins(p.playFabId, next);
-    const standing = standings.find((s) => s.seat === reward.seat);
-    updatePostMatchStats(match.gameType, p, standing.rank, standing.score, next);
-  });
-
-  stateStore.leaderboard.set(match.matchId, standings);
-  persistMatchSnapshot(match);
-  return { standings, rewards, currencyId: DEFAULT_CURRENCY_ID };
-}
-
-export function updateCoins(args) {
-  const coins = setCoins(args.playFabId, getCoins(args.playFabId) + args.delta);
-  return { coins };
-}
-
-export function reconnect(args) {
-  const match = assertMatch(args.matchId);
-  const seat = match.players.find((p) => p.playFabId === args.playFabId)?.seat ?? 0;
-  const disconnectedAt = match.players[seat].disconnectedAt || 0;
-  if (disconnectedAt && Date.now() - disconnectedAt > RECONNECT_WINDOW_MS) {
-    throw new Error('Reconnect window expired');
-  }
-  match.players[seat].disconnected = false;
-  delete match.players[seat].disconnectedAt;
-  bump(match);
-  emitEvent(match, 'PLAYER_RECONNECTED', seat, match);
-  persistMatchSnapshot(match);
-  return { seat, delta: deltaFor(match) };
-}
-
-export function markDisconnected(args) {
-  const match = assertMatch(args.matchId);
-  const seat = Number(args.seat || 0);
-  match.players[seat].disconnected = true;
-  match.players[seat].disconnectedAt = Date.now();
-  bump(match);
-  persistMatchSnapshot(match);
-  return { ok: true, reconnectWindowMs: RECONNECT_WINDOW_MS };
-}
-
-export function __testOnlySetDeadline(matchId, deadlineMs) {
-  const match = assertMatch(matchId);
-  match.turnDeadlineMs = deadlineMs;
-}
-
-export function __testOnlyStore() {
-  return stateStore;
 }
 
 if (typeof globalThis !== 'undefined') {
   globalThis.handlers = {
-    createLobby,
-    findMatch,
-    createMatch,
-    joinMatch,
-    submitMove,
-    getSnapshot,
-    getState,
-    subscribeToMatch,
-    unsubscribeFromMatch,
-    timeoutMove,
-    endMatch,
-    updateCoins,
-    reconnect,
-    markDisconnected,
+    createMatch: createMatchHandler,
+    findMatch: findMatchHandler,
+    joinMatch: joinMatchHandler,
+    submitMove: submitMoveHandler,
+    submitPass: submitPassHandler,
+    submitBid: submitBidHandler,
+    getSnapshot: getSnapshotHandler,
+    subscribeToMatch: subscribeToMatchHandler,
+    unsubscribeFromMatch: unsubscribeFromMatchHandler,
+    timeoutMove: timeoutMoveHandler,
+    endMatch: endMatchHandler,
+    updateCoins: updateCoinsHandler,
+    reconnect: reconnectHandler,
   };
 }

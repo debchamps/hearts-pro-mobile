@@ -475,6 +475,10 @@ export class MultiplayerService {
         serverTimeMs: evt.timestamp,
       });
     }
+    if (this.state) {
+      const combined = [...(this.state.events || []), ...events];
+      this.state.events = combined.slice(-200);
+    }
     if (this.state && this.state.status !== 'WAITING') {
       this.waitingSince = 0;
       this.waitingRecoveryAttempts = 0;

@@ -3,13 +3,27 @@ import { Avatar, CardView, Overlay } from '../SharedComponents';
 import { GameType, Player } from '../types';
 import { MultiplayerService, getDebugLines, getFullDebugLog } from './online/network/multiplayerService';
 import { getApiBackend, getApiLoginError } from './online/network/playfabApi';
-import { MultiplayerGameState } from './online/types';
+import { MatchEvent, MultiplayerGameState } from './online/types';
 import { TurnTimer } from './online/ui/TurnTimer';
 import { getLocalPlayerName } from './online/network/playerName';
 import { applyOnlineCoinDelta } from './online/network/coinWallet';
 import { getCallbreakAutoMoveOnTimeout } from './online/network/callbreakOnlinePrefs';
 import { getOnlineTurnDurationMs } from './online/config';
 import { sortCardsBySuitThenRankAsc } from '../services/cardSort';
+
+const EVENT_LABELS: Record<string, string> = {
+  CARD_PLAYED: 'played a card',
+  PASSING_COMPLETED: 'completed passing',
+  CARDS_DISTRIBUTED: 'received new cards',
+  TRICK_COMPLETED: 'won a trick',
+  ROUND_COMPLETED: 'ended the round',
+  MATCH_COMPLETED: 'finished the match',
+  BID_SUBMITTED: 'submitted a bid',
+  BIDDING_COMPLETED: 'bidding closed',
+  PLAYER_RECONNECTED: 'reconnected',
+  TURN_CHANGED: 'turn changed',
+};
+const MOVE_LOG_LIMIT = 6;
 
 // ---------- Animation timing constants (online: +2s before first move of next trick, +500ms per remote card for network latency) ----------
 const BOT_CARD_DELAY_MS = 1000;     // 500ms + 500ms for network latency (delay between sequential remote card plays)
@@ -47,7 +61,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const trickGenRef = useRef(0);
 
   // Card the human just played optimistically (removed from hand display)
-  const [optimisticCardId, setOptimisticCardId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState(false);
 
   // Refs for animation queue (imperative, no re-render loops)
   const animTimerRef = useRef<number | null>(null);
@@ -421,12 +435,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const hand = useMemo(() => {
     if (!state) return [];
     const hands = (state as any).hands || {};
-    let h: any[] = hands[selfSeat] || [];
-    if (optimisticCardId) {
-      h = h.filter((c: any) => c.id !== optimisticCardId);
-    }
-    return sortCardsBySuitThenRankAsc(h);
-  }, [state, selfSeat, optimisticCardId]);
+    return sortCardsBySuitThenRankAsc(hands[selfSeat] || []);
+  }, [state, selfSeat]);
 
   const avatarPlayers: Player[] = useMemo(() => {
     if (!state) return [];
@@ -449,6 +459,23 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     })).sort((a: Player, b: Player) => toViewSeat(a.id) - toViewSeat(b.id));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, selfSeat]);
+  const stateTurnPlayer = avatarPlayers.find((p) => p.id === state?.turnIndex);
+  const turnLabel = stateTurnPlayer
+    ? (state?.turnIndex === selfSeat ? 'Your turn' : `${stateTurnPlayer.name}'s turn`)
+    : 'Waiting for turn';
+  const moveLogEntries = useMemo(() => {
+    const events = state?.events || [];
+    if (!events.length) return [];
+    return [...events].slice(-MOVE_LOG_LIMIT).reverse().map((evt: MatchEvent) => {
+      const actor = avatarPlayers.find((p) => p.id === evt.actorSeat);
+      const actorName = actor
+        ? (actor.id === selfSeat ? 'You' : actor.name)
+        : `Seat ${evt.actorSeat + 1}`;
+      const label = EVENT_LABELS[evt.type] || evt.type.replace(/_/g, ' ').toLowerCase();
+      return { id: evt.eventId, text: `${actorName} ${label}` };
+    });
+  }, [avatarPlayers, selfSeat, state?.events]);
+  const lastPlayedCardId = state?.lastPlayedCard?.cardId;
 
   // Card layout
   const handLayout = useMemo(() => {
@@ -488,6 +515,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   // ---------- Drag handlers ----------
   const onDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+    if (pendingAction) return;
     const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
     setDragInfo({ id, startY: clientY, currentY: clientY });
   };
@@ -498,6 +526,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   };
   const onDragEnd = (card: any) => {
     if (!dragInfo) return;
+    if (pendingAction) { setDragInfo(null); return; }
     const diff = dragInfo.startY - dragInfo.currentY;
     if (phase === 'PASSING' && state?.turnIndex === selfSeat) {
       togglePassCard(card.id);
@@ -510,29 +539,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   // ---------- Actions ----------
   const submit = async (cardId: string) => {
     if (!state) return;
+    if (pendingAction) { showMessage('Waiting for server...'); return; }
     if (state.status === 'WAITING' || phase === 'WAITING') { showMessage('Waiting for players...'); return; }
     if (state.status !== 'PLAYING') return;
     if (phase !== 'PLAYING') { showMessage(phase === 'PASSING' ? 'Complete passing first' : phase === 'BIDDING' ? 'Complete bidding first' : 'Setting up...'); return; }
     if (state.turnIndex !== selfSeat) { showMessage('Wait for your turn'); return; }
     if (!playableIds.has(cardId)) { const lead = (state as any).leadSuit; showMessage(lead ? `Must follow ${lead}` : 'Invalid move'); return; }
 
-    // ---- OPTIMISTIC: immediately remove card from hand and show in trick ----
-    const currentHand: any[] = ((state as any).hands || {})[selfSeat] || [];
-    const card = currentHand.find((c: any) => c.id === cardId);
-    if (card) {
-      setOptimisticCardId(cardId);
-      // Show card in trick area immediately
-      const currentTrick = renderTrick.slice(); // what's currently showing
-      currentTrick.push({ seat: selfSeat, card });
-      setRenderTrick(currentTrick);
-      shownCountRef.current = currentTrick.length;
-      targetTrickRef.current = currentTrick;
-    }
-
+    setPendingAction(true);
     try {
       const next = await serviceRef.current.submitMove(cardId);
-      // Clear optimistic — server confirmed
-      setOptimisticCardId(null);
       setServerState({ ...next });
       setMessage('');
 
@@ -545,7 +561,6 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         } catch {}
       }
     } catch (e) {
-      setOptimisticCardId(null);
       const msg = (e as Error).message || '';
       if (msg.includes('Revision mismatch') || msg.includes('Not your turn') || msg.includes('Round setup in progress') || msg.includes('Not in bidding phase') || msg.includes('Not in passing phase')) {
         try {
@@ -556,11 +571,14 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         } catch {}
       }
       setError(msg);
+    } finally {
+      setPendingAction(false);
     }
   };
 
   const togglePassCard = (cardId: string) => {
     if (phase !== 'PASSING') return;
+    if (pendingAction) return;
     setSelectedPassIds((prev) => {
       if (prev.includes(cardId)) return prev.filter((id) => id !== cardId);
       if (prev.length >= 3) return prev;
@@ -570,7 +588,9 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   const confirmPass = async () => {
     if (!state || phase !== 'PASSING') return;
+    if (pendingAction) { showMessage('Waiting for server...'); return; }
     if (selectedPassIds.length !== 3) { showMessage('Select exactly 3 cards'); return; }
+    setPendingAction(true);
     try {
       const next = await serviceRef.current.submitPass(selectedPassIds);
       setServerState({ ...next });
@@ -582,12 +602,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         try { const next = await serviceRef.current.syncSnapshot(); if (next) setServerState({ ...next }); showMessage('Synced', 1000); setSelectedPassIds([]); return; } catch {}
       }
       setError(msg);
+    } finally {
+      setPendingAction(false);
     }
   };
 
   const submitBid = async (bid: number) => {
     if (!state || phase !== 'BIDDING') return;
+    if (pendingAction) { showMessage('Waiting for server...'); return; }
     if (state.turnIndex !== selfSeat) { showMessage('Wait for your bidding turn'); return; }
+    setPendingAction(true);
     try {
       const next = await serviceRef.current.submitBid(bid);
       setServerState({ ...next });
@@ -598,6 +622,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         try { const next = await serviceRef.current.syncSnapshot(); if (next) setServerState({ ...next }); showMessage('Synced', 1000); return; } catch {}
       }
       setError(msg);
+    } finally {
+      setPendingAction(false);
     }
   };
 
@@ -665,6 +691,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           <div className="bg-yellow-400 text-black px-5 py-2 rounded-full text-[10px] font-black uppercase shadow-2xl tracking-widest border-2 border-white/30 animate-deal pointer-events-auto">{message}</div>
         )}
       </div>
+      {moveLogEntries.length > 0 && (
+        <div className="absolute top-[22%] right-4 z-[95] w-40 bg-black/70 border border-white/20 rounded-2xl p-3 text-[10px]">
+          <div className="text-[8px] uppercase tracking-[0.5em] text-white/60 font-black mb-2 text-center">Move Log</div>
+          {moveLogEntries.map((entry) => (
+            <div key={entry.id} className="text-[10px] text-white/80 leading-tight truncate">
+              {entry.text}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* GAME AREA */}
       <div className="h-[70%] relative w-full">
@@ -687,6 +723,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
         {/* CENTER AREA — Trick cards / Phase messages */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[20rem] h-[20rem] flex items-center justify-center pointer-events-none">
+          {state && (
+            <div className="absolute -top-[2.5rem] left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-[0.5em] text-white/70 font-black pointer-events-none">
+              {turnLabel}
+            </div>
+          )}
+          {pendingAction && (
+            <div className="absolute -bottom-[2.5rem] left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-[0.3em] text-yellow-400 font-black bg-black/70 px-3 py-1 rounded-full border border-white/20 pointer-events-none">
+              Waiting for server...
+            </div>
+          )}
           {phase === 'WAITING' ? (
             <div className="flex flex-col items-center gap-3 animate-fadeIn">
               <div className="text-4xl animate-pulse">🎮</div>
@@ -751,11 +797,12 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
               const off = [{ x: 0, y: 45 }, { x: 60, y: 0 }, { x: 0, y: -45 }, { x: -60, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
               const startPos = [{ x: 0, y: 300 }, { x: 350, y: 0 }, { x: 0, y: -300 }, { x: -350, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
               const winDir = [{ x: 0, y: 500 }, { x: 450, y: 0 }, { x: 0, y: -500 }, { x: -450, y: 0 }][winnerViewSeat] || { x: 0, y: 0 };
+              const isLastCard = t.card.id === lastPlayedCardId;
               return (
                 <div key={`g${trickGenRef.current}-${t.seat}-${t.card.id}-${idx}`}
                   className={`absolute animate-play ${clearingTrickWinner !== null ? 'animate-clear' : ''}`}
                   style={{ '--play-x': `${off.x}px`, '--play-y': `${off.y}px`, '--play-rot': '0deg', '--start-x': `${startPos.x}px`, '--start-y': `${startPos.y}px`, '--clear-x': `${winDir.x}px`, '--clear-y': `${winDir.y}px`, zIndex: 10 + idx } as any}>
-                  <CardView card={t.card} size="md" />
+                  <CardView card={t.card} size="md" highlighted={isLastCard} />
                 </div>
               );
             })
@@ -789,7 +836,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
       {/* PASSING CONFIRM BUTTON */}
       {phase === 'PASSING' && state.turnIndex === selfSeat && (
         <div className="absolute bottom-[calc(max(1rem,var(--safe-bottom))+8px)] left-1/2 -translate-x-1/2 z-[150] animate-fadeIn">
-          <button onClick={confirmPass} disabled={selectedPassIds.length !== 3}
+          <button onClick={confirmPass} disabled={selectedPassIds.length !== 3 || pendingAction}
             className={`px-8 py-3.5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl transition-all ${selectedPassIds.length === 3 ? 'bg-yellow-500 text-black active:translate-y-1 shadow-yellow-500/30' : 'bg-white/10 text-white/40 border border-white/15'}`}>
             {selectedPassIds.length < 3 ? `Choose ${3 - selectedPassIds.length} more` : 'Confirm Pass'}
           </button>
@@ -805,8 +852,8 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           </div>
           <div className={`grid gap-2 ${gameType === 'SPADES' ? 'grid-cols-5' : 'grid-cols-4'}`}>
             {(gameType === 'SPADES' ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] : [1, 2, 3, 4, 5, 6, 7, 8]).map((b) => (
-              <button key={b} onClick={() => submitBid(b)}
-                className={`w-11 h-11 rounded-xl font-black text-base transition-all active:scale-90 border ${b === 0 ? 'bg-rose-600 text-white border-rose-400 hover:bg-rose-500' : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500 hover:text-black'}`}>
+              <button key={b} onClick={() => submitBid(b)} disabled={pendingAction}
+                className={`w-11 h-11 rounded-xl font-black text-base transition-all border ${pendingAction ? 'opacity-60 cursor-not-allowed' : 'active:scale-90'} ${b === 0 ? 'bg-rose-600 text-white border-rose-400 hover:bg-rose-500' : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500 hover:text-black'}`}>
                 {b === 0 ? 'NIL' : b}
               </button>
             ))}
@@ -876,7 +923,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           <div>status: {String(syncDebug.status)} phase: {String(syncDebug.phase)} turn: {syncDebug.turnIndex}</div>
           <div>sub: {String(syncDebug.subscriptionId || 'NA')}</div>
           <div>pump: {String(syncDebug.eventPumpRunning)} inflight: {String(syncDebug.eventPumpInFlight)} empty: {syncDebug.emptyEventLoops}</div>
-          <div>anim: {String(isAnimatingRef.current)} shown: {shownCountRef.current} rTrick: {renderTrick.length} opt: {optimisticCardId || 'none'}</div>
+          <div>anim: {String(isAnimatingRef.current)} shown: {shownCountRef.current} rTrick: {renderTrick.length} status: {pendingAction ? 'pending' : 'idle'}</div>
           <div className="text-[9px] text-yellow-400 font-bold mt-2 mb-1">— LOG ({debugLines.length}) —</div>
           <div className="max-h-[35vh] overflow-auto text-[8px] leading-[12px] text-cyan-300/90">
             {debugLines.map((line, i) => (
