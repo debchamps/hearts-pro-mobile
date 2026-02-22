@@ -680,7 +680,7 @@ function fallbackCard(match, seat) {
     hand.sort(function(a, b) { return a.value - b.value; });
     return hand[0];
   }
-  return { id: '2-CLUBS', suit: 'CLUBS', rank: '2', value: 2, points: 0 };
+  return null;
 }
 
 function highestRemainingValue(match, suit) {
@@ -1012,6 +1012,14 @@ function chooseBotCard(match, seat) {
   return legal[0].id;
 }
 
+function chooseSafeBotCardId(match, seat) {
+  var preferred = chooseBotCard(match, seat);
+  if (preferred) return preferred;
+  var legal = legalMovesForSeat(match, seat);
+  if (legal.length && legal[0] && legal[0].id) return legal[0].id;
+  return null;
+}
+
 function applyMove(match, seat, cardId, allowFallback) {
   if (match.status !== 'PLAYING') throw new Error('Match not active');
   ensureTracking(match);
@@ -1031,6 +1039,7 @@ function applyMove(match, seat, cardId, allowFallback) {
     hand.splice(idx, 1);
   } else if (allowFallback) {
     card = fallbackCard(match, seat);
+    if (!card || !card.id) throw new Error('No legal fallback card');
     // remove chosen fallback if present in hand
     var j;
     for (j = 0; j < hand.length; j++) {
@@ -1042,6 +1051,7 @@ function applyMove(match, seat, cardId, allowFallback) {
   } else {
     throw new Error('Card not in hand');
   }
+  if (!card || !card.id || !card.suit) throw new Error('Invalid card selected');
 
   match.currentTrick.push({ seat: seat, card: card });
   if (match.currentTrick.length === 1) match.leadSuit = card.suit;
@@ -1130,7 +1140,14 @@ function runServerTurnChain(match, beforeRevision) {
     var turnSeat = match.turnIndex;
     if (!isSeatBotOrDisconnected(match, turnSeat)) break;
     var beforeTrickCount = match.currentTrick.length;
-    var cardId = chooseBotCard(match, turnSeat);
+    var cardId = chooseSafeBotCardId(match, turnSeat);
+    if (!cardId) {
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, turnSeat);
+      bump(match);
+      EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
+      changed = true;
+      break;
+    }
     applyMove(match, turnSeat, cardId, true);
     bump(match);
     EventDispatcher.emit(match, 'CARD_PLAYED', turnSeat, {
@@ -1958,14 +1975,23 @@ handlers.timeoutMove = function(args, context) {
   // Handle timeout during PLAYING phase
   var isHumanTurn = !isSeatBotOrDisconnected(match, turnSeat);
   if (isHumanTurn && match.gameType === 'CALLBREAK' && match.autoMoveOnTimeoutBySeat[turnSeat] === false) {
-    match.players[turnSeat].disconnected = true;
-    match.players[turnSeat].disconnectedAt = Date.now();
+    if (match.players && match.players[turnSeat]) {
+      match.players[turnSeat].disconnected = true;
+      match.players[turnSeat].disconnectedAt = Date.now();
+    }
     bump(match);
     EventDispatcher.emit(match, 'PLAYER_DISCONNECTED', turnSeat, { players: match.players, turnIndex: match.turnIndex });
     runServerTurnChain(match, match.revision);
   } else {
     var beforeTrickCount = match.currentTrick.length;
-    var timeoutCard = chooseBotCard(match, turnSeat);
+    var timeoutCard = chooseSafeBotCardId(match, turnSeat);
+    if (!timeoutCard) {
+      match.turnDeadlineMs = Date.now() + getTurnTimeout(match, turnSeat);
+      bump(match);
+      EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
+      saveMatch(match, context);
+      return deltaFor(match, buildChangedState(before, match));
+    }
     applyMove(match, turnSeat, timeoutCard, true);
     bump(match);
     EventDispatcher.emit(match, 'CARD_PLAYED', turnSeat, {

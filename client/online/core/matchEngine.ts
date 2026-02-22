@@ -288,6 +288,11 @@ export function createDelta(prev: MultiplayerGameState | null, next: Multiplayer
 }
 
 export function applyDelta(base: MultiplayerGameState | null, delta: GameStateDelta): MultiplayerGameState {
+  // Ignore stale deltas so local revision never moves backwards.
+  if (base && typeof delta.revision === 'number' && delta.revision < base.revision) {
+    return base;
+  }
+
   const merged = base
     ? { ...base, ...delta.changed, revision: delta.revision, serverTimeMs: delta.serverTimeMs }
     : (delta.changed as MultiplayerGameState);

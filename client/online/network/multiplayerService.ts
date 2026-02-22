@@ -467,16 +467,20 @@ export class MultiplayerService {
 
   private applyEvents(events: MatchEvent[]) {
     if (!events || !events.length) return;
+    const appliedEvents: MatchEvent[] = [];
     for (const evt of events) {
+      const currentRev = this.state?.revision ?? 0;
+      if (evt.revision <= currentRev) continue;
       this.state = applyDelta(this.state, {
         matchId: evt.matchId,
         revision: evt.revision,
         changed: evt.payload,
         serverTimeMs: evt.timestamp,
       });
+      appliedEvents.push(evt);
     }
     if (this.state) {
-      const combined = [...(this.state.events || []), ...events];
+      const combined = [...(this.state.events || []), ...appliedEvents];
       this.state.events = combined.slice(-200);
     }
     if (this.state && this.state.status !== 'WAITING') {
