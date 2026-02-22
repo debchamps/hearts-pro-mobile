@@ -62,6 +62,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
   // Card the human just played optimistically (removed from hand display)
   const [pendingAction, setPendingAction] = useState(false);
+  const [pendingCardPreview, setPendingCardPreview] = useState<TrickPlay | null>(null);
 
   // Refs for animation queue (imperative, no re-render loops)
   const animTimerRef = useRef<number | null>(null);
@@ -435,8 +436,10 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   const hand = useMemo(() => {
     if (!state) return [];
     const hands = (state as any).hands || {};
-    return sortCardsBySuitThenRankAsc(hands[selfSeat] || []);
-  }, [state, selfSeat]);
+    const base = sortCardsBySuitThenRankAsc(hands[selfSeat] || []);
+    if (!pendingCardPreview || pendingCardPreview.seat !== selfSeat) return base;
+    return base.filter((c: any) => c.id !== pendingCardPreview.card?.id);
+  }, [state, selfSeat, pendingCardPreview]);
 
   const avatarPlayers: Player[] = useMemo(() => {
     if (!state) return [];
@@ -460,9 +463,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, selfSeat]);
   const stateTurnPlayer = avatarPlayers.find((p) => p.id === state?.turnIndex);
-  const turnLabel = stateTurnPlayer
-    ? (state?.turnIndex === selfSeat ? 'Your turn' : `${stateTurnPlayer.name}'s turn`)
-    : 'Waiting for turn';
+  const turnLabel = pendingAction && pendingCardPreview
+    ? 'Playing card...'
+    : stateTurnPlayer
+      ? (state?.turnIndex === selfSeat ? 'Your turn' : `${stateTurnPlayer.name}'s turn`)
+      : 'Waiting for turn';
   const moveLogEntries = useMemo(() => {
     const events = state?.events || [];
     if (!events.length) return [];
@@ -509,6 +514,28 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     return new Set(currentHand.map((c: any) => c.id));
   }, [state, selfSeat, phase]);
 
+  const displayTrick = useMemo(() => {
+    if (!pendingCardPreview) return renderTrick;
+    if (phase !== 'PLAYING' || state?.status !== 'PLAYING') return renderTrick;
+    const alreadyShown = renderTrick.some((t) => t.card?.id === pendingCardPreview.card?.id && t.seat === pendingCardPreview.seat);
+    if (alreadyShown) return renderTrick;
+    return [...renderTrick, pendingCardPreview];
+  }, [renderTrick, pendingCardPreview, phase, state?.status]);
+
+  useEffect(() => {
+    if (!pendingCardPreview || !state) return;
+    const pendingId = pendingCardPreview.card?.id;
+    if (!pendingId) {
+      setPendingCardPreview(null);
+      return;
+    }
+    const inServerTrick = ((state.currentTrick || []) as TrickPlay[]).some((p) => p.card?.id === pendingId && p.seat === selfSeat);
+    const removedFromHand = !((((state as any).hands || {})[selfSeat] || []) as any[]).some((c) => c.id === pendingId);
+    if (inServerTrick || removedFromHand) {
+      setPendingCardPreview(null);
+    }
+  }, [pendingCardPreview, state, selfSeat]);
+
   useEffect(() => {
     if (phase !== 'PASSING') setSelectedPassIds([]);
   }, [phase]);
@@ -546,6 +573,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     if (state.turnIndex !== selfSeat) { showMessage('Wait for your turn'); return; }
     if (!playableIds.has(cardId)) { const lead = (state as any).leadSuit; showMessage(lead ? `Must follow ${lead}` : 'Invalid move'); return; }
 
+    const ownHand = ((((state as any).hands || {})[selfSeat] || []) as any[]);
+    const playedCard = ownHand.find((c) => c.id === cardId);
+    if (playedCard) {
+      setPendingCardPreview({ seat: selfSeat, card: playedCard });
+    }
     setPendingAction(true);
     try {
       const next = await serviceRef.current.submitMove(cardId);
@@ -561,6 +593,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         } catch {}
       }
     } catch (e) {
+      setPendingCardPreview(null);
       const msg = (e as Error).message || '';
       if (msg.includes('Revision mismatch') || msg.includes('Not your turn') || msg.includes('Round setup in progress') || msg.includes('Not in bidding phase') || msg.includes('Not in passing phase')) {
         try {
@@ -730,7 +763,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
           )}
           {pendingAction && (
             <div className="absolute -bottom-[2.5rem] left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-[0.3em] text-yellow-400 font-black bg-black/70 px-3 py-1 rounded-full border border-white/20 pointer-events-none">
-              Waiting for server...
+              Playing...
             </div>
           )}
           {phase === 'WAITING' ? (
@@ -784,14 +817,14 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
                 })}
               </div>
             </div>
-          ) : renderTrick.length === 0 ? (
+          ) : displayTrick.length === 0 ? (
             isMyTurn ? (
               <span className="text-xs text-yellow-300 font-black uppercase tracking-widest animate-pulse">Your turn!</span>
             ) : (
               <span className="text-xs text-white/30 font-black uppercase tracking-widest">Waiting...</span>
             )
           ) : (
-            renderTrick.map((t, idx) => {
+            displayTrick.map((t, idx) => {
               const trickViewSeat = toViewSeat(t.seat);
               const winnerViewSeat = toViewSeat(clearingTrickWinner ?? toGlobalSeat(0));
               const off = [{ x: 0, y: 45 }, { x: 60, y: 0 }, { x: 0, y: -45 }, { x: -60, y: 0 }][trickViewSeat] || { x: 0, y: 0 };
