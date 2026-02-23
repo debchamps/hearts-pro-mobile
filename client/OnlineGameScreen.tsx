@@ -481,6 +481,16 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     });
   }, [avatarPlayers, selfSeat, state?.events]);
   const lastPlayedCardId = state?.lastPlayedCard?.cardId;
+  const turnViewSeat = toViewSeat(state?.turnIndex ?? 0);
+  const nextTurnViewSeat = (turnViewSeat + 1) % 4;
+  const playersByViewSeat = useMemo(() => {
+    const out: Array<Player | undefined> = [undefined, undefined, undefined, undefined];
+    for (const p of avatarPlayers) out[toViewSeat(p.id)] = p;
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avatarPlayers, selfSeat]);
+  const turnOwnerName = playersByViewSeat[turnViewSeat]?.id === selfSeat ? 'You' : (playersByViewSeat[turnViewSeat]?.name || 'Seat');
+  const nextOwnerName = playersByViewSeat[nextTurnViewSeat]?.id === selfSeat ? 'You' : (playersByViewSeat[nextTurnViewSeat]?.name || 'Seat');
 
   // Card layout
   const handLayout = useMemo(() => {
@@ -742,6 +752,28 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
 
       {/* GAME AREA */}
       <div className="h-[70%] relative w-full">
+        {/* TURN FLOW HUD */}
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-[96] bg-black/65 border border-white/20 rounded-2xl px-3 py-2">
+          <div className="text-[8px] uppercase tracking-[0.25em] text-white/60 font-black text-center">Turn Flow (Clockwise)</div>
+          <div className="mt-1 flex items-center gap-1 text-[9px] font-black">
+            {[0, 1, 2, 3].map((vs) => {
+              const p = playersByViewSeat[vs];
+              const label = !p ? 'Seat' : (p.id === selfSeat ? 'YOU' : p.name.slice(0, 6).toUpperCase());
+              const active = vs === turnViewSeat && (phase === 'PLAYING' || phase === 'BIDDING');
+              const next = vs === nextTurnViewSeat && (phase === 'PLAYING' || phase === 'BIDDING');
+              return (
+                <React.Fragment key={vs}>
+                  <span className={`px-2 py-1 rounded-lg border ${active ? 'bg-yellow-400 text-black border-yellow-200' : next ? 'bg-white/20 text-white border-white/30' : 'bg-white/5 text-white/70 border-white/10'}`}>{label}</span>
+                  {vs < 3 && <span className="text-white/40">→</span>}
+                </React.Fragment>
+              );
+            })}
+          </div>
+          <div className="mt-1 text-[8px] text-center text-yellow-300/90 font-black">
+            Now: {turnOwnerName} · Next: {nextOwnerName}
+          </div>
+        </div>
+
         {/* Player Avatars */}
         {avatarPlayers.map((p) => {
           const viewSeat = toViewSeat(p.id);
@@ -762,7 +794,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
         {/* CENTER AREA — Trick cards / Phase messages */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[20rem] h-[20rem] flex items-center justify-center pointer-events-none">
           {state && (
-            <div className="absolute -top-[2.5rem] left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-[0.5em] text-white/70 font-black pointer-events-none">
+            <div className="absolute -top-[3.3rem] left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-[0.2em] text-white/90 font-black pointer-events-none bg-black/60 border border-white/20 rounded-full px-4 py-1">
               {turnLabel}
             </div>
           )}

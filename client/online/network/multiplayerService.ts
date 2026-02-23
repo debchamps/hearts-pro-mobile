@@ -43,6 +43,7 @@ export class MultiplayerService {
   private syncTimerId: number | null = null;
   private fullSyncInFlight = false;
   private fullSyncErrorStreak = 0;
+  private lastProgressMs = Date.now();
 
   // Guard against concurrent / duplicate createMatch calls (React Strict Mode)
   private createMatchInFlight = false;
@@ -124,6 +125,7 @@ export class MultiplayerService {
       if (result.snapshot) {
         this.state = applyDelta(null, result.snapshot);
         dlog(`snap OK rev=${this.state.revision} status=${this.state.status} phase=${this.state.phase}`);
+        this.lastProgressMs = Date.now();
       }
       if (this.state?.status === 'WAITING') {
         this.waitingSince = Date.now();
@@ -152,6 +154,7 @@ export class MultiplayerService {
       const delta = await getSnap();
       this.state = applyDelta(null, delta);
       dlog(`getSnapshot OK rev=${this.state.revision} status=${this.state.status}`);
+      this.lastProgressMs = Date.now();
       if (this.state.status === 'WAITING') this.waitingSince = Date.now();
     }
 
@@ -253,6 +256,7 @@ export class MultiplayerService {
         const prevRev = this.state?.revision ?? 0;
         const prevStatus = this.state?.status ?? 'NA';
         this.state = applyDelta(this.state, snapshot);
+        if (this.state.revision > prevRev) this.lastProgressMs = Date.now();
         if (this.state.revision > prevRev || this.state.status !== prevStatus) {
           dlog(`resync ${prevRev}→${this.state.revision} ${prevStatus}→${this.state.status} phase=${this.state.phase} turn=${this.state.turnIndex}`);
         }
@@ -485,6 +489,7 @@ export class MultiplayerService {
     if (this.state) {
       const combined = [...(this.state.events || []), ...appliedEvents];
       this.state.events = combined.slice(-200);
+      if (appliedEvents.length > 0) this.lastProgressMs = Date.now();
     }
     if (this.state && this.state.status !== 'WAITING') {
       this.waitingSince = 0;
@@ -546,6 +551,13 @@ export class MultiplayerService {
         if (this.state.revision > prevRev || this.state.phase !== prevPhase || this.state.status !== prevStatus) {
           dlog(`fullSync: state changed rev=${this.state.revision} phase=${this.state.phase} status=${this.state.status}`);
           this.notify([]);
+          this.lastProgressMs = Date.now();
+        } else if (this.state.status === 'PLAYING' && Date.now() - this.lastProgressMs > 45_000) {
+          dlog('fullSync: stalled state detected, forcing resubscribe+resync');
+          this.subscriptionId = null;
+          await this.resyncSnapshot(2);
+          await this.tryResubscribe();
+          this.lastProgressMs = Date.now();
         }
 
         if (!this.subscriptionId) {
@@ -667,6 +679,7 @@ export class MultiplayerService {
       }
       this.state = applyDelta(this.state, delta);
       dlog(`submitMove OK rev=${this.state!.revision} turn=${this.state!.turnIndex} phase=${this.state!.phase} trick=${(this.state!.currentTrick || []).length}`);
+      if (this.state!.revision > beforeRev) this.lastProgressMs = Date.now();
       if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
         throw new Error('No progress');
       }
@@ -714,6 +727,7 @@ export class MultiplayerService {
       });
       this.state = applyDelta(this.state, delta);
       dlog(`submitPass OK rev=${this.state!.revision} phase=${this.state!.phase}`);
+      this.lastProgressMs = Date.now();
       this.notify([]);
       return this.state!;
     };
@@ -744,6 +758,7 @@ export class MultiplayerService {
       });
       this.state = applyDelta(this.state, delta);
       dlog(`submitBid OK bid=${bid} rev=${this.state!.revision} phase=${this.state!.phase} turn=${this.state!.turnIndex}`);
+      this.lastProgressMs = Date.now();
       this.notify([]);
       return this.state!;
     };
@@ -769,6 +784,7 @@ export class MultiplayerService {
       const delta = await api.timeoutMove({ matchId: this.matchId });
       this.state = applyDelta(this.state, delta);
       dlog(`timeout OK rev=${this.state!.revision} phase=${this.state!.phase} turn=${this.state!.turnIndex}`);
+      if (this.state!.revision > beforeRev) this.lastProgressMs = Date.now();
       if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
         this.timeoutNoProgressCount += 1;
       } else {
