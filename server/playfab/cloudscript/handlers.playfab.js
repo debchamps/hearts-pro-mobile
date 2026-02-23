@@ -1325,10 +1325,11 @@ function getMatch(matchId, context) {
 }
 
 function getMatchForWrite(matchId, context, minRevision) {
-  // For mutating handlers, bypass local cache first to reduce stale-write races.
+  // For mutating handlers, use the highest revision visible across cache + storage.
+  // Cache may be ahead of replicated storage right after a prior successful move.
   var needMin = typeof minRevision === 'number' ? minRevision : null;
   var best = null;
-  var result = getMatchOnce(matchId, context, true);
+  var result = getMatchOnce(matchId, context, false);
   if (result) best = result;
   if (result) {
     if (needMin === null || (result.revision || 0) >= needMin) {
@@ -1342,7 +1343,7 @@ function getMatchForWrite(matchId, context, minRevision) {
   while (retries > 0) {
     var spinEnd = Date.now() + delayMs;
     while (Date.now() < spinEnd) { /* spin-wait for replication */ }
-    result = getMatchOnce(matchId, context, true);
+    result = getMatchOnce(matchId, context, false);
     if (result) {
       if (!best || (result.revision || 0) > (best.revision || 0)) best = result;
       if (needMin !== null && (result.revision || 0) < needMin) {
@@ -1357,6 +1358,13 @@ function getMatchForWrite(matchId, context, minRevision) {
     delayMs *= 2;
   }
   if (best) {
+    if (needMin !== null && (best.revision || 0) < needMin) {
+      appendSyncDebug(matchId, 'getMatchForWrite.behind', {
+        needMin: needMin,
+        bestRevision: best.revision || 0,
+        playerId: getCurrentPlayerId(context)
+      });
+    }
     cache.matches[matchId] = best;
     return best;
   }
