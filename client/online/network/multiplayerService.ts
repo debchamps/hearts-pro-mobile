@@ -687,13 +687,16 @@ export class MultiplayerService {
       return this.state!;
     };
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       try {
         return await trySubmit();
       } catch (e) {
         const msg = (e as Error).message || '';
         dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
         if (!msg.includes('Revision mismatch') && !msg.includes('No progress') && !msg.includes('ServerReject:')) throw e;
+        if (msg.includes('ServerReject:RETRY_LATER:READ_BEHIND')) {
+          await new Promise((r) => setTimeout(r, 800));
+        }
         if (msg.includes('ServerReject:REJECTED_CONFLICT:')) {
           const m = msg.match(/:rev=([0-9]+)/);
           const serverRev = m ? Number(m[1]) : 0;

@@ -1805,6 +1805,22 @@ handlers.submitMove = function(args, context) {
     };
   }
   if (args.expectedRevision !== match.revision) {
+    if (typeof args.expectedRevision === 'number' && args.expectedRevision > match.revision) {
+      appendSyncDebug(match.matchId, 'submitMove.readBehind', {
+        expectedRevision: args.expectedRevision,
+        loadedRevision: match.revision,
+        seat: args.seat,
+        cardId: args.cardId
+      });
+      return {
+        matchId: match.matchId,
+        revision: match.revision,
+        changed: {},
+        serverTimeMs: Date.now(),
+        result: 'RETRY_LATER',
+        reason: 'READ_BEHIND'
+      };
+    }
     return {
       matchId: match.matchId,
       revision: match.revision,
