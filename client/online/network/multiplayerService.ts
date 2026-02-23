@@ -41,6 +41,8 @@ export class MultiplayerService {
   private autoMoveOnTimeout = true;
   private timeoutNoProgressCount = 0;
   private syncTimerId: number | null = null;
+  private fullSyncInFlight = false;
+  private fullSyncErrorStreak = 0;
 
   // Guard against concurrent / duplicate createMatch calls (React Strict Mode)
   private createMatchInFlight = false;
@@ -526,17 +528,20 @@ export class MultiplayerService {
     if (this.syncTimerId !== null) return;
     dlog(`fullSyncTimer started interval=${MultiplayerService.FULL_SYNC_INTERVAL_MS}ms`);
     this.syncTimerId = window.setInterval(async () => {
-      if (!this.matchId || !this.state) return;
-      if (this.state.status === 'COMPLETED') {
-        dlog('fullSync: COMPLETED, stopping timer');
-        this.stopFullSyncTimer();
-        return;
-      }
+      if (this.fullSyncInFlight) return;
+      this.fullSyncInFlight = true;
       try {
+        if (!this.matchId || !this.state) return;
+        if (this.state.status === 'COMPLETED') {
+          dlog('fullSync: COMPLETED, stopping timer');
+          this.stopFullSyncTimer();
+          return;
+        }
         const prevRev = this.state.revision;
         const prevPhase = this.state.phase;
         const prevStatus = this.state.status;
         await this.resyncSnapshot(1);
+        this.fullSyncErrorStreak = 0;
 
         if (this.state.revision > prevRev || this.state.phase !== prevPhase || this.state.status !== prevStatus) {
           dlog(`fullSync: state changed rev=${this.state.revision} phase=${this.state.phase} status=${this.state.status}`);
@@ -552,7 +557,15 @@ export class MultiplayerService {
           await this.tryWaitingRecovery();
         }
       } catch (e) {
-        dlog(`fullSync ERR: ${((e as Error).message || '').slice(0, 120)}`);
+        this.fullSyncErrorStreak += 1;
+        dlog(`fullSync ERR#${this.fullSyncErrorStreak}: ${((e as Error).message || '').slice(0, 120)}`);
+        // After consecutive sync failures, drop stale subscription and force a reconnect cycle.
+        if (this.fullSyncErrorStreak >= 3) {
+          this.subscriptionId = null;
+          await this.tryResubscribe();
+        }
+      } finally {
+        this.fullSyncInFlight = false;
       }
     }, MultiplayerService.FULL_SYNC_INTERVAL_MS);
   }
