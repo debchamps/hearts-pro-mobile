@@ -653,7 +653,12 @@ export class MultiplayerService {
         seat: this.seat,
         cardId,
         expectedRevision: this.state!.revision,
-      });
+      }) as any;
+      if (delta && typeof delta.result === 'string' && delta.result !== 'APPLIED') {
+        const reason = String(delta.reason || '');
+        dlog(`submitMove NAK result=${delta.result} reason=${reason} rev=${delta.revision}`);
+        throw new Error(`ServerReject:${delta.result}:${reason}`);
+      }
       this.state = applyDelta(this.state, delta);
       dlog(`submitMove OK rev=${this.state!.revision} turn=${this.state!.turnIndex} phase=${this.state!.phase} trick=${(this.state!.currentTrick || []).length}`);
       if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
@@ -669,7 +674,7 @@ export class MultiplayerService {
       } catch (e) {
         const msg = (e as Error).message || '';
         dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
-        if (!msg.includes('Revision mismatch') && !msg.includes('No progress')) throw e;
+        if (!msg.includes('Revision mismatch') && !msg.includes('No progress') && !msg.includes('ServerReject:')) throw e;
         await this.resyncSnapshot();
       }
     }
