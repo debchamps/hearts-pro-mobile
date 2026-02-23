@@ -582,6 +582,11 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     try {
       const next = await serviceRef.current.submitMove(cardId);
       setServerState({ ...next });
+      const stillInHand = ((((next as any).hands || {})[selfSeat] || []) as any[]).some((c) => c.id === cardId);
+      const inTrick = ((next.currentTrick || []) as any[]).some((p) => p?.card?.id === cardId && p?.seat === selfSeat);
+      if (stillInHand && !inTrick) {
+        setPendingCardPreview(null);
+      }
       setMessage('');
 
       if (next.status === 'COMPLETED') {
@@ -595,7 +600,7 @@ export function OnlineGameScreen({ gameType, onExit }: { gameType: GameType; onE
     } catch (e) {
       setPendingCardPreview(null);
       const msg = (e as Error).message || '';
-      if (msg.includes('Revision mismatch') || msg.includes('Not your turn') || msg.includes('Round setup in progress') || msg.includes('Not in bidding phase') || msg.includes('Not in passing phase')) {
+      if (msg.includes('Revision mismatch') || msg.includes('No progress') || msg.includes('Not your turn') || msg.includes('Round setup in progress') || msg.includes('Not in bidding phase') || msg.includes('Not in passing phase')) {
         try {
           const next = await serviceRef.current.syncSnapshot();
           if (next) setServerState({ ...next });

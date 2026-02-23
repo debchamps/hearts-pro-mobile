@@ -663,15 +663,20 @@ export class MultiplayerService {
       return this.state!;
     };
 
-    try {
-      return await trySubmit();
-    } catch (e) {
-      const msg = (e as Error).message || '';
-      dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
-      if (!msg.includes('Revision mismatch') && !msg.includes('No progress')) throw e;
-      await this.resyncSnapshot();
-      return trySubmit();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await trySubmit();
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
+        if (!msg.includes('Revision mismatch') && !msg.includes('No progress')) throw e;
+        await this.resyncSnapshot();
+      }
     }
+    // Avoid surfacing a hard error screen for transient no-progress races.
+    dlog('submitMove: no progress after retries, returning latest snapshot');
+    this.notify([]);
+    return this.state!;
   }
 
   async submitPass(cardIds: string[]): Promise<MultiplayerGameState> {
