@@ -1225,8 +1225,8 @@ function saveMatch(match, context) {
   });
 }
 
-function getMatchOnce(matchId, context) {
-  var cached = cache.matches[matchId] || null;
+function getMatchOnce(matchId, context, skipCache) {
+  var cached = skipCache ? null : (cache.matches[matchId] || null);
   var pid = getCurrentPlayerId(context);
   var newest = cached;
   var resolvedOwnerId = null;
@@ -1321,6 +1321,29 @@ function getMatch(matchId, context) {
   }
 
   appendSyncDebug(matchId, 'getMatch.miss', { playerId: getCurrentPlayerId(context) });
+  throw new Error('Match not found');
+}
+
+function getMatchForWrite(matchId, context) {
+  // For mutating handlers, bypass local cache first to reduce stale-write races.
+  var result = getMatchOnce(matchId, context, true);
+  if (result) {
+    cache.matches[matchId] = result;
+    return result;
+  }
+  var retries = 3;
+  var delayMs = 100;
+  while (retries > 0) {
+    var spinEnd = Date.now() + delayMs;
+    while (Date.now() < spinEnd) { /* spin-wait for replication */ }
+    result = getMatchOnce(matchId, context, true);
+    if (result) {
+      cache.matches[matchId] = result;
+      return result;
+    }
+    retries--;
+    delayMs *= 2;
+  }
   throw new Error('Match not found');
 }
 
@@ -1735,15 +1758,39 @@ handlers.joinMatch = function(args, context) {
 };
 
 handlers.submitMove = function(args, context) {
-  var match = getMatch(args.matchId, context);
+  var match = getMatchForWrite(args.matchId, context);
   var before = cloneState(match);
   if (match.status === 'WAITING') {
-    return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+    return {
+      matchId: match.matchId,
+      revision: match.revision,
+      changed: {},
+      serverTimeMs: Date.now(),
+      result: 'REJECTED_STATE',
+      reason: 'WAITING'
+    };
   }
   if (match.phase !== 'PLAYING') {
-    return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+    return {
+      matchId: match.matchId,
+      revision: match.revision,
+      changed: {},
+      serverTimeMs: Date.now(),
+      result: 'REJECTED_STATE',
+      reason: 'PHASE_' + String(match.phase || 'UNKNOWN')
+    };
   }
-  if (args.expectedRevision !== match.revision) return deltaFor(match, match);
+  if (args.expectedRevision !== match.revision) {
+    return {
+      matchId: match.matchId,
+      revision: match.revision,
+      changed: {},
+      serverTimeMs: Date.now(),
+      result: 'REJECTED_CONFLICT',
+      reason: 'REVISION_MISMATCH'
+    };
+  }
+  var beforeRevision = match.revision;
   var beforeTrickCount = match.currentTrick.length;
   applyMove(match, args.seat, args.cardId, false);
   bump(match);
@@ -1768,12 +1815,31 @@ handlers.submitMove = function(args, context) {
     EventDispatcher.emit(match, 'TURN_CHANGED', match.turnIndex, { turnIndex: match.turnIndex, turnDeadlineMs: match.turnDeadlineMs, phase: match.phase });
   }
   runServerTurnChain(match, match.revision);
+  if (match.revision <= beforeRevision) {
+    appendSyncDebug(match.matchId, 'submitMove.noProgressAfterApply', {
+      beforeRevision: beforeRevision,
+      afterRevision: match.revision,
+      seat: args.seat,
+      cardId: args.cardId,
+      turnIndex: match.turnIndex
+    });
+    return {
+      matchId: match.matchId,
+      revision: match.revision,
+      changed: {},
+      serverTimeMs: Date.now(),
+      result: 'REJECTED_NO_PROGRESS',
+      reason: 'NO_REVISION_ADVANCE'
+    };
+  }
   saveMatch(match, context);
-  return deltaFor(match, buildChangedState(before, match));
+  var applied = deltaFor(match, buildChangedState(before, match));
+  applied.result = 'APPLIED';
+  return applied;
 };
 
 handlers.submitPass = function(args, context) {
-  var match = getMatch(args.matchId, context);
+  var match = getMatchForWrite(args.matchId, context);
   var before = cloneState(match);
   if (match.phase !== 'PASSING') throw new Error('Not in passing phase');
   if (args.expectedRevision !== match.revision) return deltaFor(match, match);
@@ -1816,7 +1882,7 @@ handlers.submitPass = function(args, context) {
 };
 
 handlers.submitBid = function(args, context) {
-  var match = getMatch(args.matchId, context);
+  var match = getMatchForWrite(args.matchId, context);
   var before = cloneState(match);
   if (match.phase !== 'BIDDING') throw new Error('Not in bidding phase');
   if (args.expectedRevision !== match.revision) return deltaFor(match, match);
@@ -1928,7 +1994,7 @@ handlers.unsubscribeFromMatch = function(args) {
 };
 
 handlers.timeoutMove = function(args, context) {
-  var match = getMatch(args.matchId, context);
+  var match = getMatchForWrite(args.matchId, context);
   var before = cloneState(match);
   var nowMs = Date.now();
   var deadlineMs = Number(match.turnDeadlineMs || 0);
