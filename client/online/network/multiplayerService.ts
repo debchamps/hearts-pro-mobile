@@ -39,6 +39,7 @@ export class MultiplayerService {
   private gameType: GameType | null = null;
   private playerName = 'YOU';
   private autoMoveOnTimeout = true;
+  private timeoutNoProgressCount = 0;
   private syncTimerId: number | null = null;
 
   // Guard against concurrent / duplicate createMatch calls (React Strict Mode)
@@ -717,12 +718,24 @@ export class MultiplayerService {
 
   async forceTimeout() {
     if (!this.matchId || !this.state) return this.state;
-    dlog(`forceTimeout matchId=${this.matchId} rev=${this.state.revision} phase=${this.state.phase} turn=${this.state.turnIndex}`);
+    const beforeRev = this.state.revision;
+    const beforeTurn = this.state.turnIndex;
+    dlog(`forceTimeout matchId=${this.matchId} rev=${beforeRev} phase=${this.state.phase} turn=${beforeTurn}`);
     try {
       const api = await this.ensureApi();
       const delta = await api.timeoutMove({ matchId: this.matchId });
       this.state = applyDelta(this.state, delta);
       dlog(`timeout OK rev=${this.state!.revision} phase=${this.state!.phase} turn=${this.state!.turnIndex}`);
+      if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
+        this.timeoutNoProgressCount += 1;
+      } else {
+        this.timeoutNoProgressCount = 0;
+      }
+      if (this.timeoutNoProgressCount >= 3) {
+        dlog(`timeout stuck detected (count=${this.timeoutNoProgressCount}) -> resync`);
+        await this.resyncSnapshot(1);
+        this.timeoutNoProgressCount = 0;
+      }
       this.notify([]);
     } catch (e) {
       dlog(`timeout ERR: ${((e as Error).message || '').slice(0, 120)}`);

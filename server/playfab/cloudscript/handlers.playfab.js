@@ -810,9 +810,9 @@ function chooseCallbreakBotCard(match, seat, legal) {
   if (match.currentTrick.length === 0) {
     var trickNo = 14 - ((match.hands[seat] || []).length);
     var spades = hand.filter(function(c) { return c.suit === 'SPADES'; });
-    if (trickNo >= 3 && spades.length >= Math.floor((match.hands[seat] || []).length / 2) - 1) {
+    if (trickNo >= 3 && spades.length > 0 && spades.length >= Math.floor((match.hands[seat] || []).length / 2) - 1) {
       var hi = highestCard(spades);
-      if (hi.value === highestRemainingValue(match, 'SPADES')) return hi.id;
+      if (hi && hi.value === highestRemainingValue(match, 'SPADES')) return hi.id;
     }
     var aces = hand.filter(function(c) { return c.value === 14; });
     if (aces.length) return aces[0].id;
@@ -896,9 +896,9 @@ function chooseSpadesBotCard(match, seat, legal) {
     if (ace) return ace.id;
     var spades = hand.filter(function(c) { return c.suit === 'SPADES'; });
     var trickNo = 14 - ((match.hands[seat] || []).length);
-    if (trickNo >= 3 && spades.length >= Math.floor((match.hands[seat] || []).length / 2) - 1) {
+    if (trickNo >= 3 && spades.length > 0 && spades.length >= Math.floor((match.hands[seat] || []).length / 2) - 1) {
       var hiSpade = highestCard(spades);
-      if (hiSpade.value === highestRemainingValue(match, 'SPADES')) return hiSpade.id;
+      if (hiSpade && hiSpade.value === highestRemainingValue(match, 'SPADES')) return hiSpade.id;
     }
     var winMinor = minorLeadWinner(hand);
     if (winMinor) return winMinor.id;
@@ -1929,8 +1929,22 @@ handlers.unsubscribeFromMatch = function(args) {
 handlers.timeoutMove = function(args, context) {
   var match = getMatch(args.matchId, context);
   var before = cloneState(match);
-  if (Date.now() < match.turnDeadlineMs) {
+  var nowMs = Date.now();
+  var deadlineMs = Number(match.turnDeadlineMs || 0);
+  if (!isFinite(deadlineMs) || deadlineMs <= 0) deadlineMs = 0;
+  // Failsafe: if a turn has been stale for too long, ignore a bad future deadline.
+  var staleTurn = !!match.serverTimeMs && (nowMs - Number(match.serverTimeMs)) > (HUMAN_TIMEOUT_MS * 2 + FIRST_MOVE_OF_TRICK_EXTRA_MS);
+  if (nowMs < deadlineMs && !staleTurn) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
+  }
+  if (staleTurn && nowMs < deadlineMs) {
+    appendSyncDebug(match.matchId, 'timeoutMove.staleDeadlineBypassed', {
+      revision: match.revision,
+      turnIndex: match.turnIndex,
+      deadlineMs: deadlineMs,
+      nowMs: nowMs,
+      ageMs: nowMs - Number(match.serverTimeMs || 0)
+    });
   }
   var turnSeat = match.turnIndex;
 
