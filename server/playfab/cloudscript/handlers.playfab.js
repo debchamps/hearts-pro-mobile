@@ -1324,12 +1324,18 @@ function getMatch(matchId, context) {
   throw new Error('Match not found');
 }
 
-function getMatchForWrite(matchId, context) {
+function getMatchForWrite(matchId, context, minRevision) {
   // For mutating handlers, bypass local cache first to reduce stale-write races.
+  var needMin = typeof minRevision === 'number' ? minRevision : null;
+  var best = null;
   var result = getMatchOnce(matchId, context, true);
+  if (result) best = result;
   if (result) {
+    if (needMin === null || (result.revision || 0) >= needMin) {
+      cache.matches[matchId] = result;
+      return result;
+    }
     cache.matches[matchId] = result;
-    return result;
   }
   var retries = 3;
   var delayMs = 100;
@@ -1338,11 +1344,21 @@ function getMatchForWrite(matchId, context) {
     while (Date.now() < spinEnd) { /* spin-wait for replication */ }
     result = getMatchOnce(matchId, context, true);
     if (result) {
+      if (!best || (result.revision || 0) > (best.revision || 0)) best = result;
+      if (needMin !== null && (result.revision || 0) < needMin) {
+        retries--;
+        delayMs *= 2;
+        continue;
+      }
       cache.matches[matchId] = result;
       return result;
     }
     retries--;
     delayMs *= 2;
+  }
+  if (best) {
+    cache.matches[matchId] = best;
+    return best;
   }
   throw new Error('Match not found');
 }
@@ -1758,7 +1774,7 @@ handlers.joinMatch = function(args, context) {
 };
 
 handlers.submitMove = function(args, context) {
-  var match = getMatchForWrite(args.matchId, context);
+  var match = getMatchForWrite(args.matchId, context, args.expectedRevision);
   var before = cloneState(match);
   if (match.status === 'WAITING') {
     return {

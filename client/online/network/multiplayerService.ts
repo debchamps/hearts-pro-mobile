@@ -56,9 +56,9 @@ export class MultiplayerService {
   // (earlyRecheck handles the first ~7s, this is the fallback)
   private static readonly WAITING_RECOVERY_DELAY_MS = 15_000;
 
-  private static readonly EVENT_PUMP_FAST_MS = 35;
-  private static readonly EVENT_PUMP_IDLE_MS = 110;
-  private static readonly EVENT_PUMP_ERROR_MS = 220;
+  private static readonly EVENT_PUMP_FAST_MS = 120;
+  private static readonly EVENT_PUMP_IDLE_MS = 500;
+  private static readonly EVENT_PUMP_ERROR_MS = 1000;
   private static readonly FULL_SYNC_INTERVAL_MS = 4000; // slightly slower to reduce API spam
 
   private async ensureApi() {
@@ -614,13 +614,19 @@ export class MultiplayerService {
             : MultiplayerService.EVENT_PUMP_IDLE_MS);
         }
       } catch (e) {
-        const msg = ((e as Error).message || '').slice(0, 80);
+        const full = (e as Error).message || '';
+        const msg = full.slice(0, 80);
+        let backoffMs = MultiplayerService.EVENT_PUMP_ERROR_MS;
+        const retryAfter = full.match(/retryAfterSeconds\":\s*([0-9]+)/i);
+        if (retryAfter && retryAfter[1]) {
+          backoffMs = Math.max(backoffMs, Number(retryAfter[1]) * 1000);
+        }
         // Only log every 5th error to avoid spam
         if (this.emptyEventLoops % 5 === 0) {
-          dlog(`eventPump ERR: ${msg}`);
+          dlog(`eventPump ERR: ${msg}${backoffMs > MultiplayerService.EVENT_PUMP_ERROR_MS ? ` backoff=${backoffMs}ms` : ''}`);
         }
         if (this.eventPumpRunning) {
-          this.eventPumpTimer = window.setTimeout(tick, MultiplayerService.EVENT_PUMP_ERROR_MS);
+          this.eventPumpTimer = window.setTimeout(tick, backoffMs);
         }
       } finally {
         this.eventPumpInFlight = false;
@@ -657,7 +663,7 @@ export class MultiplayerService {
       if (delta && typeof delta.result === 'string' && delta.result !== 'APPLIED') {
         const reason = String(delta.reason || '');
         dlog(`submitMove NAK result=${delta.result} reason=${reason} rev=${delta.revision}`);
-        throw new Error(`ServerReject:${delta.result}:${reason}`);
+        throw new Error(`ServerReject:${delta.result}:${reason}:rev=${Number(delta.revision || 0)}`);
       }
       this.state = applyDelta(this.state, delta);
       dlog(`submitMove OK rev=${this.state!.revision} turn=${this.state!.turnIndex} phase=${this.state!.phase} trick=${(this.state!.currentTrick || []).length}`);
@@ -675,6 +681,15 @@ export class MultiplayerService {
         const msg = (e as Error).message || '';
         dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
         if (!msg.includes('Revision mismatch') && !msg.includes('No progress') && !msg.includes('ServerReject:')) throw e;
+        if (msg.includes('ServerReject:REJECTED_CONFLICT:')) {
+          const m = msg.match(/:rev=([0-9]+)/);
+          const serverRev = m ? Number(m[1]) : 0;
+          const localRev = this.state?.revision || 0;
+          // Server can temporarily lag on cross-region/read-source races; avoid hot-loop retries.
+          if (serverRev > 0 && serverRev < localRev) {
+            await new Promise((r) => setTimeout(r, 350));
+          }
+        }
         await this.resyncSnapshot();
       }
     }
