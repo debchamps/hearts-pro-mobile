@@ -9,6 +9,7 @@ var BOT_TIMEOUT_MS = 900;
 var BOT_NETWORK_LATENCY_MS = 500;       // +500ms for animation/network latency (matches client BOT_CARD_DELAY)
 var FIRST_MOVE_OF_TRICK_EXTRA_MS = 2000; // +2s before first move of next trick (matches client TRICK_PAUSE)
 var CALLBREAK_HUMAN_TIMEOUT_EXTRA_MS = 5000;
+var MAX_REASONABLE_DEADLINE_SKEW_MS = 60000; // protect against bad future deadlines / skewed clocks
 var DEFAULT_REGION = 'US';
 var DEFAULT_CURRENCY_ID = 'CO';
 var QUICK_MATCH_TICKET_TIMEOUT_SEC = 20;
@@ -1933,17 +1934,23 @@ handlers.timeoutMove = function(args, context) {
   var deadlineMs = Number(match.turnDeadlineMs || 0);
   if (!isFinite(deadlineMs) || deadlineMs <= 0) deadlineMs = 0;
   // Failsafe: if a turn has been stale for too long, ignore a bad future deadline.
-  var staleTurn = !!match.serverTimeMs && (nowMs - Number(match.serverTimeMs)) > (HUMAN_TIMEOUT_MS * 2 + FIRST_MOVE_OF_TRICK_EXTRA_MS);
-  if (nowMs < deadlineMs && !staleTurn) {
+  var serverAgeMs = nowMs - Number(match.serverTimeMs || 0);
+  var staleTurn = !!match.serverTimeMs && serverAgeMs > (HUMAN_TIMEOUT_MS * 2 + FIRST_MOVE_OF_TRICK_EXTRA_MS);
+  var suspiciousFutureDeadline = deadlineMs > (nowMs + MAX_REASONABLE_DEADLINE_SKEW_MS);
+  var suspiciousFutureServerTime = !!match.serverTimeMs && serverAgeMs < -MAX_REASONABLE_DEADLINE_SKEW_MS;
+  if (nowMs < deadlineMs && !staleTurn && !suspiciousFutureDeadline && !suspiciousFutureServerTime) {
     return { matchId: match.matchId, revision: match.revision, changed: {}, serverTimeMs: Date.now() };
   }
-  if (staleTurn && nowMs < deadlineMs) {
-    appendSyncDebug(match.matchId, 'timeoutMove.staleDeadlineBypassed', {
+  if (nowMs < deadlineMs && (staleTurn || suspiciousFutureDeadline || suspiciousFutureServerTime)) {
+    appendSyncDebug(match.matchId, 'timeoutMove.deadlineBypassed', {
       revision: match.revision,
       turnIndex: match.turnIndex,
       deadlineMs: deadlineMs,
       nowMs: nowMs,
-      ageMs: nowMs - Number(match.serverTimeMs || 0)
+      ageMs: serverAgeMs,
+      staleTurn: staleTurn,
+      suspiciousFutureDeadline: suspiciousFutureDeadline,
+      suspiciousFutureServerTime: suspiciousFutureServerTime
     });
   }
   var turnSeat = match.turnIndex;

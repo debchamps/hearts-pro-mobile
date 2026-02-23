@@ -646,6 +646,8 @@ export class MultiplayerService {
     dlog(`submitMove cardId=${cardId} rev=${this.state.revision} turn=${this.state.turnIndex}`);
 
     const trySubmit = async () => {
+      const beforeRev = this.state!.revision;
+      const beforeTurn = this.state!.turnIndex;
       const delta = await api.submitMove({
         matchId: this.matchId!,
         seat: this.seat,
@@ -654,6 +656,9 @@ export class MultiplayerService {
       });
       this.state = applyDelta(this.state, delta);
       dlog(`submitMove OK rev=${this.state!.revision} turn=${this.state!.turnIndex} phase=${this.state!.phase} trick=${(this.state!.currentTrick || []).length}`);
+      if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
+        throw new Error('No progress');
+      }
       this.notify([]);
       return this.state!;
     };
@@ -663,7 +668,7 @@ export class MultiplayerService {
     } catch (e) {
       const msg = (e as Error).message || '';
       dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
-      if (!msg.includes('Revision mismatch')) throw e;
+      if (!msg.includes('Revision mismatch') && !msg.includes('No progress')) throw e;
       await this.resyncSnapshot();
       return trySubmit();
     }
