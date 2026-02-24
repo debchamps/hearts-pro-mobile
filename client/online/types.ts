@@ -118,6 +118,8 @@ export interface MoveSubmission {
   seat: number;
   cardId: string;
   expectedRevision: number;
+  /** Idempotency key: prevents double-apply if a retry reaches the server after the original succeeded. */
+  moveId?: string;
 }
 
 export interface ReconnectPayload {

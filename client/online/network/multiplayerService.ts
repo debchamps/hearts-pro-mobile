@@ -61,6 +61,7 @@ export class MultiplayerService {
   private static readonly EVENT_PUMP_IDLE_MS = 500;
   private static readonly EVENT_PUMP_ERROR_MS = 1000;
   private static readonly FULL_SYNC_INTERVAL_MS = 4000; // slightly slower to reduce API spam
+  private static readonly FULL_SYNC_ACTIVE_MS = 2000;   // faster during active play to bound READ_BEHIND stalls
 
   private async ensureApi() {
     if (!this.api) {
@@ -531,7 +532,10 @@ export class MultiplayerService {
   // ──────────────────────────────────────────────
   private startFullSyncTimer() {
     if (this.syncTimerId !== null) return;
-    dlog(`fullSyncTimer started interval=${MultiplayerService.FULL_SYNC_INTERVAL_MS}ms`);
+    const interval = this.state?.status === 'PLAYING'
+      ? MultiplayerService.FULL_SYNC_ACTIVE_MS
+      : MultiplayerService.FULL_SYNC_INTERVAL_MS;
+    dlog(`fullSyncTimer started interval=${interval}ms`);
     this.syncTimerId = window.setInterval(async () => {
       if (this.fullSyncInFlight) return;
       this.fullSyncInFlight = true;
@@ -663,56 +667,114 @@ export class MultiplayerService {
     const api = await this.ensureApi();
     dlog(`submitMove cardId=${cardId} rev=${this.state.revision} turn=${this.state.turnIndex}`);
 
-    const trySubmit = async () => {
+    // Stable idempotency key: same card+seat+baseRevision always maps to the same key.
+    // If a retry reaches the server after the original succeeded, the server returns
+    // the cached result instead of rejecting with NOT_YOUR_TURN.
+    const moveId = `${this.matchId}-s${this.seat}-r${this.state.revision}-${cardId}`;
+
+    const MAX_ATTEMPTS = 8;
+    const READ_BEHIND_BASE_MS = 600; // exponential base: 600 → 1200 → 2400 → 4800 → 8000ms
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const beforeRev = this.state!.revision;
       const beforeTurn = this.state!.turnIndex;
-      const delta = await api.submitMove({
-        matchId: this.matchId!,
-        seat: this.seat,
-        cardId,
-        expectedRevision: this.state!.revision,
-      }) as any;
-      if (delta && typeof delta.result === 'string' && delta.result !== 'APPLIED') {
-        const reason = String(delta.reason || '');
-        dlog(`submitMove NAK result=${delta.result} reason=${reason} rev=${delta.revision}`);
-        throw new Error(`ServerReject:${delta.result}:${reason}:rev=${Number(delta.revision || 0)}`);
-      }
-      this.state = applyDelta(this.state, delta);
-      dlog(`submitMove OK rev=${this.state!.revision} turn=${this.state!.turnIndex} phase=${this.state!.phase} trick=${(this.state!.currentTrick || []).length}`);
-      if (this.state!.revision > beforeRev) this.lastProgressMs = Date.now();
-      if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
-        throw new Error('No progress');
-      }
-      this.notify([]);
-      return this.state!;
-    };
 
-    for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        return await trySubmit();
+        const delta = await api.submitMove({
+          matchId: this.matchId!,
+          seat: this.seat,
+          cardId,
+          expectedRevision: this.state!.revision,
+          moveId,
+        }) as any;
+
+        if (delta && typeof delta.result === 'string' && delta.result !== 'APPLIED') {
+          const reason = String(delta.reason || '');
+          const serverRev = Number(delta.revision || 0);
+          dlog(`submitMove NAK result=${delta.result} reason=${reason} serverRev=${serverRev} localRev=${this.state!.revision}`);
+          throw new Error(`ServerReject:${delta.result}:${reason}:rev=${serverRev}`);
+        }
+
+        this.state = applyDelta(this.state, delta);
+        dlog(`submitMove OK rev=${this.state!.revision} turn=${this.state!.turnIndex} phase=${this.state!.phase} trick=${(this.state!.currentTrick || []).length}`);
+        if (this.state!.revision > beforeRev) this.lastProgressMs = Date.now();
+        if (this.state!.revision === beforeRev && this.state!.turnIndex === beforeTurn) {
+          throw new Error('No progress');
+        }
+        this.notify([]);
+        return this.state!;
+
       } catch (e) {
         const msg = (e as Error).message || '';
-        dlog(`submitMove ERR: ${msg.slice(0, 120)}`);
-        if (!msg.includes('Revision mismatch') && !msg.includes('No progress') && !msg.includes('ServerReject:')) throw e;
-        if (msg.includes('ServerReject:RETRY_LATER:READ_BEHIND')) {
-          await new Promise((r) => setTimeout(r, 800));
-        }
-        if (msg.includes('ServerReject:REJECTED_CONFLICT:')) {
+        dlog(`submitMove ERR attempt=${attempt}: ${msg.slice(0, 120)}`);
+
+        if (!msg.includes('Revision mismatch') &&
+            !msg.includes('No progress') &&
+            !msg.includes('ServerReject:')) throw e;
+
+        const isReadBehind = msg.includes('ServerReject:RETRY_LATER:READ_BEHIND');
+        const isConflict   = msg.includes('ServerReject:REJECTED_CONFLICT:');
+
+        if (isReadBehind) {
+          // Exponential backoff matched to PlayFab TitleData replication window (~1–5s typical).
+          // Each doubling gives the stale replica progressively more time to converge.
+          const delay = Math.min(READ_BEHIND_BASE_MS * Math.pow(2, attempt), 8000);
+          dlog(`submitMove READ_BEHIND retry=${attempt} backoff=${delay}ms`);
+          await new Promise((r) => setTimeout(r, delay));
+          // Force-resync: fetches the canonical snapshot regardless of local revision,
+          // which unblocks retries when the stale guard would otherwise keep local rev frozen.
+          await this.resyncSnapshotForced();
+        } else if (isConflict) {
           const m = msg.match(/:rev=([0-9]+)/);
           const serverRev = m ? Number(m[1]) : 0;
-          const localRev = this.state?.revision || 0;
-          // Server can temporarily lag on cross-region/read-source races; avoid hot-loop retries.
-          if (serverRev > 0 && serverRev < localRev) {
+          if (serverRev > 0 && serverRev < (this.state?.revision || 0)) {
             await new Promise((r) => setTimeout(r, 350));
           }
+          await this.resyncSnapshot();
+        } else {
+          await this.resyncSnapshot();
         }
-        await this.resyncSnapshot();
+
+        // If the turn has already advanced past our seat, the move was accepted
+        // (either our retry succeeded on the server, or a timeout/bot took over).
+        // Return current state rather than retrying a move that is no longer ours.
+        if (this.state && this.state.turnIndex !== this.seat) {
+          dlog(`submitMove turnAdvanced: seat=${this.seat} now turn=${this.state.turnIndex} card=${cardId} — treating as accepted`);
+          this.notify([]);
+          return this.state;
+        }
       }
     }
+
     // Avoid surfacing a hard error screen for transient no-progress races.
     dlog('submitMove: no progress after retries, returning latest snapshot');
     this.notify([]);
     return this.state!;
+  }
+
+  /**
+   * Force-fetch the canonical game snapshot from the server.
+   * Unlike resyncSnapshot, this applies the result even when the server revision
+   * equals the local revision (necessary to unblock READ_BEHIND retry loops where
+   * the stale-guard in applyDelta would otherwise silently discard the update).
+   */
+  private async resyncSnapshotForced() {
+    if (!this.matchId) return;
+    const api = await this.ensureApi();
+    try {
+      const snapshot = await api.getSnapshot({ matchId: this.matchId, seat: this.seat });
+      const prevRev = this.state?.revision ?? 0;
+      if (snapshot.revision >= prevRev) {
+        // Apply as a full replacement (null base) so all fields are refreshed.
+        this.state = applyDelta(null, snapshot);
+        if (this.state.revision > prevRev) this.lastProgressMs = Date.now();
+        dlog(`resyncForced: ${prevRev}→${this.state.revision} phase=${this.state.phase} turn=${this.state.turnIndex}`);
+      } else {
+        dlog(`resyncForced: server still stale (${snapshot.revision} < local ${prevRev}), keeping local`);
+      }
+    } catch (e) {
+      dlog(`resyncForced ERR: ${((e as Error).message || '').slice(0, 80)}`);
+    }
   }
 
   async submitPass(cardIds: string[]): Promise<MultiplayerGameState> {

@@ -1338,24 +1338,29 @@ function getMatchForWrite(matchId, context, minRevision) {
     }
     cache.matches[matchId] = result;
   }
+  // Retry with a real I/O round-trip between attempts instead of a CPU spin-wait.
+  // A spin-wait cannot help with storage replication lag — it only burns CloudScript
+  // execution budget. Writing and immediately reading a throwaway probe key forces an
+  // actual storage round-trip, giving the replication layer time to converge.
   var retries = 3;
-  var delayMs = 100;
+  var probeIdx = 0;
   while (retries > 0) {
-    var spinEnd = Date.now() + delayMs;
-    while (Date.now() < spinEnd) { /* spin-wait for replication */ }
+    try {
+      var probeKey = 'probe_gmfw_' + matchId + '_' + (probeIdx++);
+      server.SetTitleData({ Key: probeKey, Value: '1' });
+      server.GetTitleData({ Keys: [probeKey] });
+    } catch (e) {}
     result = getMatchOnce(matchId, context, false);
     if (result) {
       if (!best || (result.revision || 0) > (best.revision || 0)) best = result;
       if (needMin !== null && (result.revision || 0) < needMin) {
         retries--;
-        delayMs *= 2;
         continue;
       }
       cache.matches[matchId] = result;
       return result;
     }
     retries--;
-    delayMs *= 2;
   }
   if (best) {
     if (needMin !== null && (best.revision || 0) < needMin) {
@@ -1784,6 +1789,19 @@ handlers.joinMatch = function(args, context) {
 handlers.submitMove = function(args, context) {
   var match = getMatchForWrite(args.matchId, context, args.expectedRevision);
   var before = cloneState(match);
+
+  // Idempotency: if this exact move was already applied (same moveId), return the
+  // current state as a successful delta rather than rejecting with NOT_YOUR_TURN.
+  // This protects against double-apply when a client retries after a dropped OK response.
+  if (args.moveId && match.lastMoveId === args.moveId) {
+    var idempotentDelta = deltaFor(match, buildChangedState(before, match));
+    idempotentDelta.result = 'APPLIED';
+    appendSyncDebug(match.matchId, 'submitMove.idempotent', {
+      moveId: args.moveId, revision: match.revision, seat: args.seat
+    });
+    return idempotentDelta;
+  }
+
   if (match.status === 'WAITING') {
     return {
       matchId: match.matchId,
@@ -1871,6 +1889,10 @@ handlers.submitMove = function(args, context) {
       result: 'REJECTED_NO_PROGRESS',
       reason: 'NO_REVISION_ADVANCE'
     };
+  }
+  // Record the idempotency key so a duplicate retry returns this result instead of failing.
+  if (args.moveId) {
+    match.lastMoveId = args.moveId;
   }
   saveMatch(match, context);
   var applied = deltaFor(match, buildChangedState(before, match));
